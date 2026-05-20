@@ -20,6 +20,7 @@ const navItems = [
   { label: 'Fraud Detection', href: '/fraud', icon: IconShieldAlert },
   { label: 'Analytics', href: '/analytics', icon: IconBarChart },
   { label: 'Team', href: '/team', icon: IconUsers },
+  { label: 'AI Demo', href: '/demo', icon: IconZap },
 ]
 
 const bottomItems = [

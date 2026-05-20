@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(npx tsc *)",
-      "Bash(npx eslint *)"
+      "Bash(npx eslint *)",
+      "Bash(node -e \"try{require.resolve\\('framer-motion'\\);console.log\\('framer-motion: FOUND'\\)}catch\\(e\\){console.log\\('framer-motion: NOT INSTALLED'\\)}\")",
+      "Bash(npm install *)"
     ]
   }
 }
