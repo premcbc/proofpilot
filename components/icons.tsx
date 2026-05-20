@@ -268,3 +268,28 @@ export function IconDownload({ className = "w-4 h-4" }: IconProps) {
     </svg>
   )
 }
+
+export function IconChevronLeft({ className = "w-4 h-4" }: IconProps) {
+  return (
+    <svg className={`${base} ${className}`} {...props}>
+      <polyline points="15 18 9 12 15 6" />
+    </svg>
+  )
+}
+
+export function IconCheck({ className = "w-4 h-4" }: IconProps) {
+  return (
+    <svg className={`${base} ${className}`} {...props}>
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  )
+}
+
+export function IconArrowUpRight({ className = "w-4 h-4" }: IconProps) {
+  return (
+    <svg className={`${base} ${className}`} {...props}>
+      <line x1="7" y1="17" x2="17" y2="7" />
+      <polyline points="7 7 17 7 17 17" />
+    </svg>
+  )
+}

@@ -4,7 +4,11 @@
       "Bash(npx tsc *)",
       "Bash(npx eslint *)",
       "Bash(node -e \"try{require.resolve\\('framer-motion'\\);console.log\\('framer-motion: FOUND'\\)}catch\\(e\\){console.log\\('framer-motion: NOT INSTALLED'\\)}\")",
-      "Bash(npm install *)"
+      "Bash(npm install *)",
+      "Bash(mkdir -p \"c:\\\\Users\\\\ADMIN\\\\Downloads\\\\proofpilot\\\\app\\\\reviews\\\\[id]\" && mkdir -p \"c:\\\\Users\\\\ADMIN\\\\Downloads\\\\proofpilot\\\\components\\\\review\")"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\ADMIN\\Downloads\\proofpilot\\app\\reviews"
     ]
   }
 }

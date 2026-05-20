@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { Card } from '@/components/ui/card'
 import { RiskBadge, StatusBadge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -67,9 +68,9 @@ export function ReviewQueue() {
                 className="group hover:bg-slate-800/30 transition-colors duration-100"
               >
                 <td className="px-4 py-3">
-                  <span className="font-mono text-xs text-slate-300 group-hover:text-indigo-300 transition-colors">
+                  <Link href={`/reviews/${review.id}`} className="font-mono text-xs text-slate-300 group-hover:text-indigo-300 transition-colors">
                     {review.id}
-                  </span>
+                  </Link>
                 </td>
                 <td className="px-4 py-3">
                   <span className={`inline-flex items-center rounded px-2 py-0.5 text-[11px] font-medium ${typeColors[review.type]}`}>
@@ -90,9 +91,11 @@ export function ReviewQueue() {
                 </td>
                 <td className="px-4 py-3">
                   <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <Button variant="ghost" size="sm" ariaLabel="View review">
-                      <IconEye className="w-3.5 h-3.5" />
-                    </Button>
+                    <Link href={`/reviews/${review.id}`}>
+                      <Button variant="ghost" size="sm" ariaLabel="View review">
+                        <IconEye className="w-3.5 h-3.5" />
+                      </Button>
+                    </Link>
                     <Button variant="ghost" size="sm" ariaLabel="More options">
                       <IconMoreHorizontal className="w-3.5 h-3.5" />
                     </Button>
