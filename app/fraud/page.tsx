@@ -65,7 +65,7 @@ export default function FraudPage() {
               <p className={`text-xl font-bold ${s.color}`}>{s.value}</p>
             </div>
             <p className="text-xs font-medium text-slate-300">{s.label}</p>
-            <p className="text-[10px] text-slate-600 mt-0.5">{s.sub}</p>
+            <p className="text-[10px] text-slate-500 mt-0.5">{s.sub}</p>
           </Card>
         ))}
       </div>
@@ -126,16 +126,16 @@ export default function FraudPage() {
                     />
                   ) : (
                     sortedRulesets.map((r) => (
-                      <tr key={r.name} className="group hover:bg-slate-800/40 transition-colors duration-200 ease-out">
-                        <td className="px-4 py-3 text-xs font-medium text-slate-200">{r.name}</td>
-                        <td className="px-4 py-3">
+                      <tr key={r.name} className="group hover:bg-slate-800/40 transition-colors duration-150 ease-out">
+                        <td className="px-4 py-3.5 text-xs font-medium text-slate-200">{r.name}</td>
+                        <td className="px-4 py-3.5">
                           <span className="font-mono text-[10px] text-slate-500 bg-slate-800/60 rounded px-1.5 py-0.5">
                             {r.model}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-xs font-semibold text-slate-300">{r.detections}</td>
-                        <td className="px-4 py-3 text-xs text-slate-400">{r.accuracy}</td>
-                        <td className="px-4 py-3">
+                        <td className="px-4 py-3.5 text-xs font-semibold text-slate-300">{r.detections}</td>
+                        <td className="px-4 py-3.5 text-xs text-slate-400">{r.accuracy}</td>
+                        <td className="px-4 py-3.5">
                           <Badge variant={r.status === 'Active' ? 'success' : 'muted'} dot>
                             {r.status}
                           </Badge>

@@ -103,7 +103,7 @@ export function FraudAlerts() {
             <IconShieldAlert className="w-5 h-5" />
           </div>
           <p className="text-sm font-medium text-slate-400">No active alerts</p>
-          <p className="mt-1 text-xs text-slate-600">
+          <p className="mt-1 text-xs text-slate-500">
             All clear — no fraud patterns detected recently.
           </p>
         </div>
@@ -114,7 +114,7 @@ export function FraudAlerts() {
             return (
               <div
                 key={alert.id}
-                className="group px-4 py-3 hover:bg-slate-800/30 transition-colors duration-100 cursor-pointer"
+                className="group px-4 py-3.5 hover:bg-slate-800/30 transition-colors duration-150 cursor-pointer"
               >
                 <div className="flex items-start gap-3">
                   <div className="mt-1 flex items-center">
@@ -149,7 +149,10 @@ export function FraudAlerts() {
       )}
 
       <div className="px-4 py-3 border-t border-slate-800/60">
-        <button className="w-full rounded-md py-1.5 text-xs font-medium text-indigo-400 hover:text-indigo-300 hover:bg-indigo-500/5 transition-colors">
+        <button
+          type="button"
+          className="w-full rounded-md py-1.5 text-xs font-medium text-indigo-400 hover:text-indigo-300 hover:bg-indigo-500/5 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-indigo-500/40"
+        >
           Open Fraud Detection Center →
         </button>
       </div>

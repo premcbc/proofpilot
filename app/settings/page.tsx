@@ -256,7 +256,7 @@ function FraudSection() {
             <div key={i} className="absolute top-0 bottom-0 w-0.5 bg-slate-950/60" style={{ left: `${v}%` }} />
           ))}
         </div>
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           {([
             { label: 'Auto-Approve below', value: low,  setter: setLow,  badge: 'success' as const },
             { label: 'Manual review above', value: med, setter: setMed,  badge: 'warning' as const },
@@ -313,7 +313,7 @@ function FraudSection() {
           </div>
           <Button variant="secondary" size="sm">Manage Blocklist</Button>
         </div>
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           {[
             { label: 'Blocked Merchants',    value: '847',   sub: '+12 this week'        },
             { label: 'Blocked Patterns',     value: '214',   sub: '6 custom rules'       },
@@ -322,7 +322,7 @@ function FraudSection() {
             <div key={label} className="rounded-lg border border-slate-800/80 bg-slate-900/40 px-3 py-2.5">
               <p className="text-lg font-bold text-slate-100">{value}</p>
               <p className="text-[10px] font-medium text-slate-400 mt-0.5">{label}</p>
-              <p className="text-[10px] text-slate-600">{sub}</p>
+              <p className="text-[10px] text-slate-500">{sub}</p>
             </div>
           ))}
         </div>
@@ -393,7 +393,7 @@ function TeamSection() {
             <IconPlus className="w-3 h-3" />Send Invite
           </Button>
         </div>
-        <p className="text-[11px] text-slate-600 mt-2">Invitee will receive an email to join your ProofPilot workspace.</p>
+        <p className="text-[11px] text-slate-500 mt-2">Invitee will receive an email to join your ProofPilot workspace.</p>
       </Card>
 
       <Card padding="md">
@@ -457,7 +457,7 @@ function WebhooksSection() {
                     </Badge>
                   </div>
                   <p className="font-mono text-[10px] text-slate-500 truncate max-w-xs">{ep.url}</p>
-                  <p className="text-[10px] text-slate-600 mt-1">
+                  <p className="text-[10px] text-slate-500 mt-1">
                     {ep.events} events subscribed · Last delivery {ep.lastDelivery}
                   </p>
                 </div>
@@ -485,7 +485,7 @@ function WebhooksSection() {
               />
               <div>
                 <p className="font-mono text-xs text-slate-300 group-hover:text-slate-200 transition-colors">{ev.id}</p>
-                <p className="text-[11px] text-slate-600">{ev.desc}</p>
+                <p className="text-[11px] text-slate-500">{ev.desc}</p>
               </div>
             </label>
           ))}
@@ -514,7 +514,7 @@ function WebhooksSection() {
               { label: 'API Version', value: 'v2.4.1'        },
             ].map(({ label, value }) => (
               <div key={label} className="rounded-lg border border-slate-800/60 bg-slate-900/40 px-3 py-2.5">
-                <p className="text-[10px] text-slate-600 uppercase tracking-wider font-semibold">{label}</p>
+                <p className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">{label}</p>
                 <p className="text-sm font-mono text-slate-300 mt-0.5">{value}</p>
               </div>
             ))}
@@ -551,7 +551,7 @@ function AiSection() {
             <div key={i} className="absolute top-0 bottom-0 w-0.5 bg-slate-950/70" style={{ left: `${v}%` }} />
           ))}
         </div>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500 block mb-1.5">Escalate below</label>
             <div className="flex items-center gap-2 mb-1">
@@ -563,7 +563,7 @@ function AiSection() {
               />
               <span className="text-xs text-slate-500">% confidence</span>
             </div>
-            <p className="text-[11px] text-slate-600">Routes to human review queue</p>
+            <p className="text-[11px] text-slate-500">Routes to human review queue</p>
           </div>
           <div>
             <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500 block mb-1.5">Auto-approve above</label>
@@ -576,7 +576,7 @@ function AiSection() {
               />
               <span className="text-xs text-slate-500">% confidence</span>
             </div>
-            <p className="text-[11px] text-slate-600">~68% of queue auto-resolved</p>
+            <p className="text-[11px] text-slate-500">~68% of queue auto-resolved</p>
           </div>
         </div>
       </Card>

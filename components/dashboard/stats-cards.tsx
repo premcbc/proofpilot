@@ -83,7 +83,7 @@ export function StatsCards() {
             <p className="text-2xl font-bold tracking-tight text-slate-100">{stat.value}</p>
             <p className="mt-0.5 text-xs font-medium text-slate-500">{stat.label}</p>
           </div>
-          <p className="mt-2 text-[11px] text-slate-600 border-t border-slate-800/60 pt-2">{stat.sub}</p>
+          <p className="mt-2 text-[11px] text-slate-500 border-t border-slate-800/60 pt-2">{stat.sub}</p>
         </Card>
       ))}
     </div>

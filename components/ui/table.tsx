@@ -137,7 +137,7 @@ export function SortableHeader({
         className={[
           'flex items-center text-[11px] font-semibold uppercase tracking-wider',
           'transition-colors duration-150 hover:text-slate-300',
-          'focus-visible:outline-none focus-visible:text-slate-200',
+          'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-indigo-500/40 focus-visible:rounded-sm focus-visible:text-slate-200',
           isActive ? 'text-slate-300' : 'text-slate-500',
         ].join(' ')}
       >
@@ -176,7 +176,7 @@ export function TableEmptyState({
           )}
           <p className="text-sm font-medium text-slate-400">{title}</p>
           {description && (
-            <p className="mt-1 max-w-xs text-xs text-slate-600">{description}</p>
+            <p className="mt-1 max-w-xs text-xs text-slate-500">{description}</p>
           )}
           {action && <div className="mt-4">{action}</div>}
         </div>
@@ -224,7 +224,7 @@ export function ClickableRow({
       className={[
         TABLE_ROW_BASE,
         'cursor-pointer',
-        'focus-visible:outline-none focus-visible:bg-slate-700/50',
+        'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-indigo-500/40 focus-visible:bg-slate-700/40',
         isSelected ? TABLE_ROW_SELECTED : '',
         className,
       ]

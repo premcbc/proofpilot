@@ -112,7 +112,7 @@ export function ReviewQueue() {
                 const rowHref = `/reviews/${review.id}`
                 const cells = (
                   <>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3.5">
                       {hasDetailPage ? (
                         <Link
                           href={rowHref}
@@ -124,26 +124,26 @@ export function ReviewQueue() {
                         <span className="font-mono text-xs text-slate-300">{review.id}</span>
                       )}
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3.5">
                       <span
                         className={`inline-flex items-center rounded px-2 py-0.5 text-[11px] font-medium ${typeColors[review.type]}`}
                       >
                         {review.type}
                       </span>
                     </td>
-                    <td className="px-4 py-3 hidden md:table-cell">
+                    <td className="px-4 py-3.5 hidden md:table-cell">
                       <span className="font-mono text-xs text-slate-400">{review.submitter}</span>
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3.5">
                       <RiskBadge score={review.riskScore} />
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3.5">
                       <StatusBadge status={review.status} />
                     </td>
-                    <td className="px-4 py-3 hidden lg:table-cell">
+                    <td className="px-4 py-3.5 hidden lg:table-cell">
                       <span className="text-xs text-slate-500">{review.submitted}</span>
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3.5">
                       <div className={`flex items-center justify-end gap-1 ${TABLE_ACTION_REVEAL}`}>
                         {hasDetailPage ? (
                           <Link href={rowHref}>

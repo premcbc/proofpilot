@@ -442,7 +442,7 @@ function ReasoningCard({ reasoning }: { reasoning: string[] }) {
           </svg>
         </div>
         <span className="text-xs font-semibold text-slate-200">AI Reasoning</span>
-        <span className="ml-auto text-[10px] text-slate-600">{reasoning.length} signals</span>
+        <span className="ml-auto text-[10px] text-slate-500">{reasoning.length} signals</span>
       </div>
       <div className="p-4 space-y-2.5">
         {reasoning.map((point, i) => (
@@ -653,13 +653,13 @@ function DecisionCard({
                     </div>
                     <div className="text-center">
                       <p className={`text-[11px] font-semibold ${btn.titleColor}`}>{btn.label}</p>
-                      <p className="text-[9px] text-slate-600 mt-0.5">{btn.sub}</p>
+                      <p className="text-[9px] text-slate-500 mt-0.5">{btn.sub}</p>
                     </div>
                   </button>
                 ))}
               </div>
 
-              <p className="mt-3 text-center text-[10px] text-slate-700">
+              <p className="mt-3 text-center text-[10px] text-slate-600">
                 All decisions are logged to the immutable audit trail
               </p>
             </motion.div>
@@ -789,7 +789,7 @@ function AuditTimelineCard({ entries }: { entries: AuditEntry[] }) {
           <IconActivity className="w-3.5 h-3.5" />
         </div>
         <span className="text-xs font-semibold text-slate-200">Audit Trail</span>
-        <span className="ml-auto text-[10px] text-slate-600 tabular-nums">{entries.length} events · immutable</span>
+        <span className="ml-auto text-[10px] text-slate-500 tabular-nums">{entries.length} events · immutable</span>
       </div>
       <div className="p-4">
         <div className="relative">
@@ -816,7 +816,7 @@ function AuditTimelineCard({ entries }: { entries: AuditEntry[] }) {
                       </div>
                       <p className="text-[10px] text-slate-500 mt-0.5 leading-relaxed">{entry.detail}</p>
                     </div>
-                    <span className="shrink-0 text-[9px] font-mono text-slate-700 tabular-nums mt-0.5">{entry.timestamp}</span>
+                    <span className="shrink-0 text-[9px] font-mono text-slate-600 tabular-nums mt-0.5">{entry.timestamp}</span>
                   </motion.div>
                 )
               })}

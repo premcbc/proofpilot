@@ -123,7 +123,7 @@ export default function TeamPage() {
         ].map((s) => (
           <Card key={s.label} padding="md">
             <p className="text-xl font-bold text-slate-100">{s.value}</p>
-            <p className="text-xs text-slate-500 mt-1">{s.label}</p>
+            <p className="text-xs text-slate-500 mt-0.5">{s.label}</p>
           </Card>
         ))}
       </div>
@@ -210,9 +210,9 @@ export default function TeamPage() {
                   return (
                     <tr
                       key={m.email}
-                      className="group hover:bg-slate-800/40 transition-colors duration-200 ease-out"
+                      className="group hover:bg-slate-800/40 transition-colors duration-150 ease-out"
                     >
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3.5">
                         <div className="flex items-center gap-2.5">
                           <div
                             className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br ${m.color} text-[10px] font-semibold text-white`}
@@ -225,26 +225,26 @@ export default function TeamPage() {
                           </div>
                         </div>
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3.5">
                         <Badge variant={roleConfig[m.role] as 'info' | 'success' | 'default' | 'warning'}>
                           {m.role}
                         </Badge>
                       </td>
-                      <td className="px-4 py-3 hidden sm:table-cell">
+                      <td className="px-4 py-3.5 hidden sm:table-cell">
                         <Badge variant={m.status === 'Active' ? 'success' : 'muted'} dot>
                           {m.status}
                         </Badge>
                       </td>
-                      <td className="px-4 py-3 text-xs text-slate-300 hidden md:table-cell">
+                      <td className="px-4 py-3.5 text-xs text-slate-300 hidden md:table-cell">
                         {m.reviews.toLocaleString()}
                       </td>
-                      <td className="px-4 py-3 text-xs font-medium text-slate-300 hidden lg:table-cell">
+                      <td className="px-4 py-3.5 text-xs font-medium text-slate-300 hidden lg:table-cell">
                         {accuracy}
                       </td>
-                      <td className="px-4 py-3 text-xs text-slate-500 hidden lg:table-cell">
+                      <td className="px-4 py-3.5 text-xs text-slate-500 hidden lg:table-cell">
                         {m.joined}
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3.5">
                         <div className={`flex justify-end ${TABLE_ACTION_REVEAL}`}>
                           <Button variant="ghost" size="sm" ariaLabel="Member options">
                             <IconMoreHorizontal className="w-3.5 h-3.5" />

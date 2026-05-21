@@ -71,7 +71,7 @@ export default function ReviewsPage() {
           <Card key={s.label} padding="sm">
             <p className="text-lg font-bold text-slate-100">{s.value}</p>
             <p className="text-xs font-medium text-slate-500 mt-0.5">{s.label}</p>
-            <p className="text-[10px] text-slate-600 mt-1">{s.sub}</p>
+            <p className="text-[10px] text-slate-500 mt-0.5">{s.sub}</p>
           </Card>
         ))}
       </div>

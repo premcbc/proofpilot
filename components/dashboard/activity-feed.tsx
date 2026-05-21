@@ -118,7 +118,7 @@ export function ActivityFeed() {
           {events.map((event) => {
             const cfg = actionConfig[event.action]
             return (
-              <div key={event.id} className="flex items-start gap-3 py-2 group cursor-pointer hover:bg-slate-800/20 rounded-lg px-2 -mx-2 transition-colors duration-100">
+              <div key={event.id} className="flex items-start gap-3 py-2 group cursor-pointer hover:bg-slate-800/20 rounded-lg px-2 -mx-2 transition-colors duration-150">
                 {/* Avatar */}
                 <div
                   className={`relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br ${event.color} text-[10px] font-semibold text-white ring-2 ring-slate-950 z-10`}
@@ -134,9 +134,9 @@ export function ActivityFeed() {
                       <span className={`font-medium ${cfg.color}`}>{cfg.label}</span>{' '}
                       <span className="font-mono text-slate-400">{event.item}</span>
                     </p>
-                    <span className="text-[10px] text-slate-600 shrink-0">{event.time}</span>
+                    <span className="text-[10px] text-slate-500 shrink-0">{event.time}</span>
                   </div>
-                  <p className="text-[11px] text-slate-600 mt-0.5">{event.detail}</p>
+                  <p className="text-[11px] text-slate-500 mt-0.5">{event.detail}</p>
                 </div>
               </div>
             )
@@ -145,7 +145,10 @@ export function ActivityFeed() {
       </div>
 
       <div className="px-4 py-3 border-t border-slate-800/60">
-        <button className="w-full rounded-md py-1.5 text-xs font-medium text-slate-500 hover:text-slate-300 hover:bg-slate-800/50 transition-colors">
+        <button
+          type="button"
+          className="w-full rounded-md py-1.5 text-xs font-medium text-slate-500 hover:text-slate-300 hover:bg-slate-800/50 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-indigo-500/40"
+        >
           Load earlier activity
         </button>
       </div>

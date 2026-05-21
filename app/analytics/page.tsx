@@ -142,9 +142,16 @@ export default function AnalyticsPage() {
 
       {/* Top submitters table */}
       <Card padding="none">
-        <div className="p-4 border-b border-slate-800/60">
-          <h3 className="text-sm font-semibold text-slate-100">Top Submitters</h3>
-          <p className="text-xs text-slate-500 mt-0.5">Highest volume this week</p>
+        <div className="flex items-center justify-between p-4 border-b border-slate-800/60">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-400">
+              <IconBarChart className="w-4 h-4" />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-slate-100">Top Submitters</h3>
+              <p className="text-xs text-slate-500 mt-0.5">Highest volume this week</p>
+            </div>
+          </div>
         </div>
         <div className={TABLE_SCROLL_WRAPPER}>
           <table className="w-full text-sm">
@@ -176,12 +183,12 @@ export default function AnalyticsPage() {
                 sortedSubmitters.map((s) => (
                   <tr
                     key={s.id}
-                    className="group hover:bg-slate-800/40 transition-colors duration-200 ease-out"
+                    className="group hover:bg-slate-800/40 transition-colors duration-150 ease-out"
                   >
-                    <td className="px-4 py-3 font-mono text-xs text-slate-300">{s.id}</td>
-                    <td className="px-4 py-3 text-xs text-slate-300">{s.count.toLocaleString()}</td>
-                    <td className="px-4 py-3 text-xs font-medium text-slate-200">{s.approvalRate}</td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3.5 font-mono text-xs text-slate-300">{s.id}</td>
+                    <td className="px-4 py-3.5 text-xs text-slate-300">{s.count.toLocaleString()}</td>
+                    <td className="px-4 py-3.5 text-xs font-medium text-slate-200">{s.approvalRate}</td>
+                    <td className="px-4 py-3.5">
                       <Badge
                         variant={s.risk === 'Critical' ? 'critical' : s.risk === 'High' ? 'danger' : 'success'}
                         dot
