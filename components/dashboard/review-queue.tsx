@@ -1,9 +1,27 @@
+'use client'
+
 import Link from 'next/link'
 import { Card } from '@/components/ui/card'
 import { RiskBadge, StatusBadge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { IconFileSearch, IconEye, IconFilter, IconDownload, IconMoreHorizontal } from '@/components/icons'
-import { ClickableRow, TABLE_ROW_BASE, TABLE_ACTION_REVEAL } from '@/components/ui/table'
+import {
+  IconFileSearch,
+  IconEye,
+  IconFilter,
+  IconDownload,
+  IconMoreHorizontal,
+} from '@/components/icons'
+import {
+  ClickableRow,
+  TABLE_ROW_BASE,
+  TABLE_ACTION_REVEAL,
+  TABLE_SCROLL_WRAPPER,
+  THEAD_STICKY,
+  THEAD_ROW_BG,
+  SortableHeader,
+  TableEmptyState,
+  useSortable,
+} from '@/components/ui/table'
 
 const reviews = [
   { id: 'REV-8821', type: 'Screenshot', submitter: 'user_4729', riskScore: 87, status: 'Flagged', submitted: '2m ago', size: '2.4 MB' },
@@ -22,7 +40,11 @@ const typeColors: Record<string, string> = {
   Video: 'text-sky-400 bg-sky-500/8',
 }
 
+const DETAIL_PAGE_IDS = new Set(['REV-8821', 'REV-8820', 'REV-8819'])
+
 export function ReviewQueue() {
+  const { sorted: sortedReviews, sortKey, sortDir, onSort } = useSortable(reviews)
+
   return (
     <Card padding="none">
       <div className="p-4 border-b border-slate-800/60">
@@ -49,82 +71,110 @@ export function ReviewQueue() {
         </div>
       </div>
 
-      <div className="overflow-x-auto">
+      <div className={TABLE_SCROLL_WRAPPER}>
         <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-slate-800/60">
-              <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">ID</th>
-              <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Type</th>
-              <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500 hidden md:table-cell">Submitter</th>
-              <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Risk</th>
-              <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Status</th>
-              <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500 hidden lg:table-cell">Submitted</th>
-              <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-wider text-slate-500">Actions</th>
+          <thead className={THEAD_STICKY}>
+            <tr className={`border-b border-slate-800/60 ${THEAD_ROW_BG}`}>
+              <SortableHeader sortKey="id" activeKey={sortKey} direction={sortDir} onSort={onSort}>
+                ID
+              </SortableHeader>
+              <SortableHeader sortKey="type" activeKey={sortKey} direction={sortDir} onSort={onSort}>
+                Type
+              </SortableHeader>
+              <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500 hidden md:table-cell">
+                Submitter
+              </th>
+              <SortableHeader sortKey="riskScore" activeKey={sortKey} direction={sortDir} onSort={onSort}>
+                Risk
+              </SortableHeader>
+              <SortableHeader sortKey="status" activeKey={sortKey} direction={sortDir} onSort={onSort}>
+                Status
+              </SortableHeader>
+              <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500 hidden lg:table-cell">
+                Submitted
+              </th>
+              <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Actions
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800/40">
-            {reviews.map((review) => {
-              const hasDetailPage = ['REV-8821', 'REV-8820', 'REV-8819'].includes(review.id)
-              const rowHref = `/reviews/${review.id}`
-              const cells = (
-                <>
-                  <td className="px-4 py-3">
-                    {hasDetailPage ? (
-                      <Link href={rowHref} className="font-mono text-xs text-slate-300 group-hover:text-indigo-300 transition-colors">
-                        {review.id}
-                      </Link>
-                    ) : (
-                      <span className="font-mono text-xs text-slate-300">{review.id}</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={`inline-flex items-center rounded px-2 py-0.5 text-[11px] font-medium ${typeColors[review.type]}`}>
-                      {review.type}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 hidden md:table-cell">
-                    <span className="font-mono text-xs text-slate-400">{review.submitter}</span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <RiskBadge score={review.riskScore} />
-                  </td>
-                  <td className="px-4 py-3">
-                    <StatusBadge status={review.status} />
-                  </td>
-                  <td className="px-4 py-3 hidden lg:table-cell">
-                    <span className="text-xs text-slate-500">{review.submitted}</span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className={`flex items-center justify-end gap-1 ${TABLE_ACTION_REVEAL}`}>
+            {sortedReviews.length === 0 ? (
+              <TableEmptyState
+                colSpan={7}
+                icon={<IconFilter className="w-5 h-5" />}
+                title="No reviews match your filters"
+                description="Try adjusting your filter criteria or clear all filters to see all reviews."
+              />
+            ) : (
+              sortedReviews.map((review) => {
+                const hasDetailPage = DETAIL_PAGE_IDS.has(review.id)
+                const rowHref = `/reviews/${review.id}`
+                const cells = (
+                  <>
+                    <td className="px-4 py-3">
                       {hasDetailPage ? (
-                        <Link href={rowHref}>
+                        <Link
+                          href={rowHref}
+                          className="font-mono text-xs text-slate-300 group-hover:text-indigo-300 transition-colors"
+                        >
+                          {review.id}
+                        </Link>
+                      ) : (
+                        <span className="font-mono text-xs text-slate-300">{review.id}</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span
+                        className={`inline-flex items-center rounded px-2 py-0.5 text-[11px] font-medium ${typeColors[review.type]}`}
+                      >
+                        {review.type}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 hidden md:table-cell">
+                      <span className="font-mono text-xs text-slate-400">{review.submitter}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <RiskBadge score={review.riskScore} />
+                    </td>
+                    <td className="px-4 py-3">
+                      <StatusBadge status={review.status} />
+                    </td>
+                    <td className="px-4 py-3 hidden lg:table-cell">
+                      <span className="text-xs text-slate-500">{review.submitted}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className={`flex items-center justify-end gap-1 ${TABLE_ACTION_REVEAL}`}>
+                        {hasDetailPage ? (
+                          <Link href={rowHref}>
+                            <Button variant="ghost" size="sm" ariaLabel="View review">
+                              <IconEye className="w-3.5 h-3.5" />
+                            </Button>
+                          </Link>
+                        ) : (
                           <Button variant="ghost" size="sm" ariaLabel="View review">
                             <IconEye className="w-3.5 h-3.5" />
                           </Button>
-                        </Link>
-                      ) : (
-                        <Button variant="ghost" size="sm" ariaLabel="View review">
-                          <IconEye className="w-3.5 h-3.5" />
+                        )}
+                        <Button variant="ghost" size="sm" ariaLabel="More options">
+                          <IconMoreHorizontal className="w-3.5 h-3.5" />
                         </Button>
-                      )}
-                      <Button variant="ghost" size="sm" ariaLabel="More options">
-                        <IconMoreHorizontal className="w-3.5 h-3.5" />
-                      </Button>
-                    </div>
-                  </td>
-                </>
-              )
+                      </div>
+                    </td>
+                  </>
+                )
 
-              return hasDetailPage ? (
-                <ClickableRow key={review.id} href={rowHref}>
-                  {cells}
-                </ClickableRow>
-              ) : (
-                <tr key={review.id} className={TABLE_ROW_BASE}>
-                  {cells}
-                </tr>
-              )
-            })}
+                return hasDetailPage ? (
+                  <ClickableRow key={review.id} href={rowHref}>
+                    {cells}
+                  </ClickableRow>
+                ) : (
+                  <tr key={review.id} className={TABLE_ROW_BASE}>
+                    {cells}
+                  </tr>
+                )
+              })
+            )}
           </tbody>
         </table>
       </div>

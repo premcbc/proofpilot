@@ -1,3 +1,5 @@
+'use client'
+
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -95,44 +97,56 @@ export function FraudAlerts() {
         </div>
       </div>
 
-      <div className="divide-y divide-slate-800/40">
-        {alerts.map((alert) => {
-          const cfg = severityConfig[alert.severity]
-          return (
-            <div
-              key={alert.id}
-              className="group px-4 py-3 hover:bg-slate-800/30 transition-colors duration-100 cursor-pointer"
-            >
-              <div className="flex items-start gap-3">
-                <div className="mt-1 flex items-center">
-                  <span className={`h-2 w-2 rounded-full shrink-0 ${cfg.dot}`} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between gap-2 mb-0.5">
-                    <span className="text-xs font-semibold text-slate-200 truncate">{alert.type}</span>
-                    <span className="text-[10px] text-slate-500 shrink-0">{alert.time}</span>
+      {alerts.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
+          <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-slate-800/60 text-slate-500">
+            <IconShieldAlert className="w-5 h-5" />
+          </div>
+          <p className="text-sm font-medium text-slate-400">No active alerts</p>
+          <p className="mt-1 text-xs text-slate-600">
+            All clear — no fraud patterns detected recently.
+          </p>
+        </div>
+      ) : (
+        <div className="divide-y divide-slate-800/40">
+          {alerts.map((alert) => {
+            const cfg = severityConfig[alert.severity]
+            return (
+              <div
+                key={alert.id}
+                className="group px-4 py-3 hover:bg-slate-800/30 transition-colors duration-100 cursor-pointer"
+              >
+                <div className="flex items-start gap-3">
+                  <div className="mt-1 flex items-center">
+                    <span className={`h-2 w-2 rounded-full shrink-0 ${cfg.dot}`} />
                   </div>
-                  <p className="text-[11px] text-slate-500 truncate">{alert.description}</p>
-                  <div className="flex items-center gap-2 mt-1.5">
-                    <span className="font-mono text-[10px] text-slate-500">{alert.detail}</span>
-                    {alert.count > 1 && (
-                      <span className="text-[10px] text-slate-600">·</span>
-                    )}
-                    {alert.count > 1 && (
-                      <span className="text-[10px] font-medium text-slate-500">{alert.count} events</span>
-                    )}
-                    <div className="ml-auto">
-                      <Badge variant={cfg.badge as 'critical' | 'danger' | 'warning'}>
-                        {alert.severity}
-                      </Badge>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2 mb-0.5">
+                      <span className="text-xs font-semibold text-slate-200 truncate">{alert.type}</span>
+                      <span className="text-[10px] text-slate-500 shrink-0">{alert.time}</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 truncate">{alert.description}</p>
+                    <div className="flex items-center gap-2 mt-1.5">
+                      <span className="font-mono text-[10px] text-slate-500">{alert.detail}</span>
+                      {alert.count > 1 && (
+                        <span className="text-[10px] text-slate-600">·</span>
+                      )}
+                      {alert.count > 1 && (
+                        <span className="text-[10px] font-medium text-slate-500">{alert.count} events</span>
+                      )}
+                      <div className="ml-auto">
+                        <Badge variant={cfg.badge as 'critical' | 'danger' | 'warning'}>
+                          {alert.severity}
+                        </Badge>
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
-            </div>
-          )
-        })}
-      </div>
+            )
+          })}
+        </div>
+      )}
 
       <div className="px-4 py-3 border-t border-slate-800/60">
         <button className="w-full rounded-md py-1.5 text-xs font-medium text-indigo-400 hover:text-indigo-300 hover:bg-indigo-500/5 transition-colors">

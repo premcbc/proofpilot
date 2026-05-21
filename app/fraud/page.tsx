@@ -1,19 +1,31 @@
+'use client'
+
 import { FraudAlerts } from '@/components/dashboard/fraud-alerts'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { IconShieldAlert, IconAlertTriangle, IconActivity, IconDownload } from '@/components/icons'
+import {
+  TABLE_SCROLL_WRAPPER,
+  THEAD_STICKY,
+  THEAD_ROW_BG,
+  SortableHeader,
+  TableEmptyState,
+  useSortable,
+} from '@/components/ui/table'
 
 const rulesets = [
-  { name: 'AI Content Detection', status: 'Active', detections: 47, accuracy: '99.2%', model: 'GAN-v4' },
-  { name: 'Coordinated Behavior', status: 'Active', detections: 23, accuracy: '96.8%', model: 'Graph-v2' },
-  { name: 'Metadata Integrity', status: 'Active', detections: 12, accuracy: '100%', model: 'Rule-based' },
-  { name: 'Rate Anomaly', status: 'Active', detections: 8, accuracy: '94.1%', model: 'TimeSeries-v1' },
-  { name: 'Hash Deduplication', status: 'Active', detections: 31, accuracy: '100%', model: 'Hash-exact' },
-  { name: 'Geolocation Check', status: 'Inactive', detections: 0, accuracy: '—', model: 'IP-v2' },
+  { name: 'AI Content Detection', status: 'Active', detections: 47, accuracy: '99.2%', accuracyNum: 99.2, model: 'GAN-v4' },
+  { name: 'Coordinated Behavior', status: 'Active', detections: 23, accuracy: '96.8%', accuracyNum: 96.8, model: 'Graph-v2' },
+  { name: 'Metadata Integrity', status: 'Active', detections: 12, accuracy: '100%', accuracyNum: 100, model: 'Rule-based' },
+  { name: 'Rate Anomaly', status: 'Active', detections: 8, accuracy: '94.1%', accuracyNum: 94.1, model: 'TimeSeries-v1' },
+  { name: 'Hash Deduplication', status: 'Active', detections: 31, accuracy: '100%', accuracyNum: 100, model: 'Hash-exact' },
+  { name: 'Geolocation Check', status: 'Inactive', detections: 0, accuracy: '—', accuracyNum: 0, model: 'IP-v2' },
 ]
 
 export default function FraudPage() {
+  const { sorted: sortedRulesets, sortKey, sortDir, onSort } = useSortable(rulesets)
+
   return (
     <div className="p-4 md:p-6 space-y-5 max-w-[1600px]">
       {/* Header */}
@@ -83,31 +95,54 @@ export default function FraudPage() {
                 Report
               </Button>
             </div>
-            <div className="overflow-x-auto">
+            <div className={TABLE_SCROLL_WRAPPER}>
               <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-slate-800/60">
-                    <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Ruleset</th>
-                    <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Model</th>
-                    <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Hits</th>
-                    <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Accuracy</th>
-                    <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Status</th>
+                <thead className={THEAD_STICKY}>
+                  <tr className={`border-b border-slate-800/60 ${THEAD_ROW_BG}`}>
+                    <SortableHeader sortKey="name" activeKey={sortKey} direction={sortDir} onSort={onSort}>
+                      Ruleset
+                    </SortableHeader>
+                    <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                      Model
+                    </th>
+                    <SortableHeader sortKey="detections" activeKey={sortKey} direction={sortDir} onSort={onSort}>
+                      Hits
+                    </SortableHeader>
+                    <SortableHeader sortKey="accuracyNum" activeKey={sortKey} direction={sortDir} onSort={onSort}>
+                      Accuracy
+                    </SortableHeader>
+                    <SortableHeader sortKey="status" activeKey={sortKey} direction={sortDir} onSort={onSort}>
+                      Status
+                    </SortableHeader>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/40">
-                  {rulesets.map((r) => (
-                    <tr key={r.name} className="group hover:bg-slate-800/40 transition-colors duration-200 ease-out">
-                      <td className="px-4 py-3 text-xs font-medium text-slate-200">{r.name}</td>
-                      <td className="px-4 py-3">
-                        <span className="font-mono text-[10px] text-slate-500 bg-slate-800/60 rounded px-1.5 py-0.5">{r.model}</span>
-                      </td>
-                      <td className="px-4 py-3 text-xs font-semibold text-slate-300">{r.detections}</td>
-                      <td className="px-4 py-3 text-xs text-slate-400">{r.accuracy}</td>
-                      <td className="px-4 py-3">
-                        <Badge variant={r.status === 'Active' ? 'success' : 'muted'} dot>{r.status}</Badge>
-                      </td>
-                    </tr>
-                  ))}
+                  {sortedRulesets.length === 0 ? (
+                    <TableEmptyState
+                      colSpan={5}
+                      icon={<IconActivity className="w-5 h-5" />}
+                      title="No detection rulesets configured"
+                      description="Add your first ruleset to start detecting fraud patterns."
+                    />
+                  ) : (
+                    sortedRulesets.map((r) => (
+                      <tr key={r.name} className="group hover:bg-slate-800/40 transition-colors duration-200 ease-out">
+                        <td className="px-4 py-3 text-xs font-medium text-slate-200">{r.name}</td>
+                        <td className="px-4 py-3">
+                          <span className="font-mono text-[10px] text-slate-500 bg-slate-800/60 rounded px-1.5 py-0.5">
+                            {r.model}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-xs font-semibold text-slate-300">{r.detections}</td>
+                        <td className="px-4 py-3 text-xs text-slate-400">{r.accuracy}</td>
+                        <td className="px-4 py-3">
+                          <Badge variant={r.status === 'Active' ? 'success' : 'muted'} dot>
+                            {r.status}
+                          </Badge>
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>

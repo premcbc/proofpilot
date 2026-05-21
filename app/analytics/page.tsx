@@ -1,7 +1,17 @@
+'use client'
+
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { IconBarChart, IconDownload, IconTrendingUp, IconTrendingDown } from '@/components/icons'
+import {
+  TABLE_SCROLL_WRAPPER,
+  THEAD_STICKY,
+  THEAD_ROW_BG,
+  SortableHeader,
+  TableEmptyState,
+  useSortable,
+} from '@/components/ui/table'
 
 const weeklyData = [
   { day: 'Mon', reviews: 412, approved: 389, rejected: 23, fraud: 4 },
@@ -15,15 +25,18 @@ const weeklyData = [
 
 const maxReviews = Math.max(...weeklyData.map((d) => d.reviews))
 
+// Pre-compute numeric approval rate for sort — defined at module level.
 const topSubmitters = [
-  { id: 'corp_1193', count: 312, approvalRate: '99.4%', risk: 'Low' },
-  { id: 'agency_221', count: 287, approvalRate: '98.6%', risk: 'Low' },
-  { id: 'user_4729', count: 143, approvalRate: '12.3%', risk: 'Critical' },
-  { id: 'corp_0847', count: 119, approvalRate: '97.2%', risk: 'Low' },
-  { id: 'agency_099', count: 104, approvalRate: '95.8%', risk: 'Low' },
+  { id: 'corp_1193', count: 312, approvalRate: '99.4%', approvalRateNum: 99.4, risk: 'Low' },
+  { id: 'agency_221', count: 287, approvalRate: '98.6%', approvalRateNum: 98.6, risk: 'Low' },
+  { id: 'user_4729', count: 143, approvalRate: '12.3%', approvalRateNum: 12.3, risk: 'Critical' },
+  { id: 'corp_0847', count: 119, approvalRate: '97.2%', approvalRateNum: 97.2, risk: 'Low' },
+  { id: 'agency_099', count: 104, approvalRate: '95.8%', approvalRateNum: 95.8, risk: 'Low' },
 ]
 
 export default function AnalyticsPage() {
+  const { sorted: sortedSubmitters, sortKey, sortDir, onSort } = useSortable(topSubmitters)
+
   return (
     <div className="p-4 md:p-6 space-y-5 max-w-[1600px]">
       {/* Header */}
@@ -133,32 +146,52 @@ export default function AnalyticsPage() {
           <h3 className="text-sm font-semibold text-slate-100">Top Submitters</h3>
           <p className="text-xs text-slate-500 mt-0.5">Highest volume this week</p>
         </div>
-        <div className="overflow-x-auto">
+        <div className={TABLE_SCROLL_WRAPPER}>
           <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate-800/60">
-                <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Submitter</th>
-                <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Submissions</th>
-                <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Approval Rate</th>
-                <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">Risk Profile</th>
+            <thead className={THEAD_STICKY}>
+              <tr className={`border-b border-slate-800/60 ${THEAD_ROW_BG}`}>
+                <SortableHeader sortKey="id" activeKey={sortKey} direction={sortDir} onSort={onSort}>
+                  Submitter
+                </SortableHeader>
+                <SortableHeader sortKey="count" activeKey={sortKey} direction={sortDir} onSort={onSort}>
+                  Submissions
+                </SortableHeader>
+                <SortableHeader sortKey="approvalRateNum" activeKey={sortKey} direction={sortDir} onSort={onSort}>
+                  Approval Rate
+                </SortableHeader>
+                <SortableHeader sortKey="risk" activeKey={sortKey} direction={sortDir} onSort={onSort}>
+                  Risk Profile
+                </SortableHeader>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/40">
-              {topSubmitters.map((s) => (
-                <tr key={s.id} className="group hover:bg-slate-800/40 transition-colors duration-200 ease-out">
-                  <td className="px-4 py-3 font-mono text-xs text-slate-300">{s.id}</td>
-                  <td className="px-4 py-3 text-xs text-slate-300">{s.count.toLocaleString()}</td>
-                  <td className="px-4 py-3 text-xs font-medium text-slate-200">{s.approvalRate}</td>
-                  <td className="px-4 py-3">
-                    <Badge
-                      variant={s.risk === 'Critical' ? 'critical' : s.risk === 'High' ? 'danger' : 'success'}
-                      dot
-                    >
-                      {s.risk}
-                    </Badge>
-                  </td>
-                </tr>
-              ))}
+              {sortedSubmitters.length === 0 ? (
+                <TableEmptyState
+                  colSpan={4}
+                  icon={<IconBarChart className="w-5 h-5" />}
+                  title="No analytics data available"
+                  description="Submitter data will appear once reviews have been processed."
+                />
+              ) : (
+                sortedSubmitters.map((s) => (
+                  <tr
+                    key={s.id}
+                    className="group hover:bg-slate-800/40 transition-colors duration-200 ease-out"
+                  >
+                    <td className="px-4 py-3 font-mono text-xs text-slate-300">{s.id}</td>
+                    <td className="px-4 py-3 text-xs text-slate-300">{s.count.toLocaleString()}</td>
+                    <td className="px-4 py-3 text-xs font-medium text-slate-200">{s.approvalRate}</td>
+                    <td className="px-4 py-3">
+                      <Badge
+                        variant={s.risk === 'Critical' ? 'critical' : s.risk === 'High' ? 'danger' : 'success'}
+                        dot
+                      >
+                        {s.risk}
+                      </Badge>
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
