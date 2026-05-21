@@ -3,6 +3,7 @@ import { Card } from '@/components/ui/card'
 import { RiskBadge, StatusBadge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { IconFileSearch, IconEye, IconFilter, IconDownload, IconMoreHorizontal } from '@/components/icons'
+import { ClickableRow, TABLE_ROW_BASE, TABLE_ACTION_REVEAL } from '@/components/ui/table'
 
 const reviews = [
   { id: 'REV-8821', type: 'Screenshot', submitter: 'user_4729', riskScore: 87, status: 'Flagged', submitted: '2m ago', size: '2.4 MB' },
@@ -62,47 +63,68 @@ export function ReviewQueue() {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800/40">
-            {reviews.map((review) => (
-              <tr
-                key={review.id}
-                className="group hover:bg-slate-800/30 transition-colors duration-100"
-              >
-                <td className="px-4 py-3">
-                  <Link href={`/reviews/${review.id}`} className="font-mono text-xs text-slate-300 group-hover:text-indigo-300 transition-colors">
-                    {review.id}
-                  </Link>
-                </td>
-                <td className="px-4 py-3">
-                  <span className={`inline-flex items-center rounded px-2 py-0.5 text-[11px] font-medium ${typeColors[review.type]}`}>
-                    {review.type}
-                  </span>
-                </td>
-                <td className="px-4 py-3 hidden md:table-cell">
-                  <span className="font-mono text-xs text-slate-400">{review.submitter}</span>
-                </td>
-                <td className="px-4 py-3">
-                  <RiskBadge score={review.riskScore} />
-                </td>
-                <td className="px-4 py-3">
-                  <StatusBadge status={review.status} />
-                </td>
-                <td className="px-4 py-3 hidden lg:table-cell">
-                  <span className="text-xs text-slate-500">{review.submitted}</span>
-                </td>
-                <td className="px-4 py-3">
-                  <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <Link href={`/reviews/${review.id}`}>
-                      <Button variant="ghost" size="sm" ariaLabel="View review">
-                        <IconEye className="w-3.5 h-3.5" />
+            {reviews.map((review) => {
+              const hasDetailPage = ['REV-8821', 'REV-8820', 'REV-8819'].includes(review.id)
+              const rowHref = `/reviews/${review.id}`
+              const cells = (
+                <>
+                  <td className="px-4 py-3">
+                    {hasDetailPage ? (
+                      <Link href={rowHref} className="font-mono text-xs text-slate-300 group-hover:text-indigo-300 transition-colors">
+                        {review.id}
+                      </Link>
+                    ) : (
+                      <span className="font-mono text-xs text-slate-300">{review.id}</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className={`inline-flex items-center rounded px-2 py-0.5 text-[11px] font-medium ${typeColors[review.type]}`}>
+                      {review.type}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 hidden md:table-cell">
+                    <span className="font-mono text-xs text-slate-400">{review.submitter}</span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <RiskBadge score={review.riskScore} />
+                  </td>
+                  <td className="px-4 py-3">
+                    <StatusBadge status={review.status} />
+                  </td>
+                  <td className="px-4 py-3 hidden lg:table-cell">
+                    <span className="text-xs text-slate-500">{review.submitted}</span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className={`flex items-center justify-end gap-1 ${TABLE_ACTION_REVEAL}`}>
+                      {hasDetailPage ? (
+                        <Link href={rowHref}>
+                          <Button variant="ghost" size="sm" ariaLabel="View review">
+                            <IconEye className="w-3.5 h-3.5" />
+                          </Button>
+                        </Link>
+                      ) : (
+                        <Button variant="ghost" size="sm" ariaLabel="View review">
+                          <IconEye className="w-3.5 h-3.5" />
+                        </Button>
+                      )}
+                      <Button variant="ghost" size="sm" ariaLabel="More options">
+                        <IconMoreHorizontal className="w-3.5 h-3.5" />
                       </Button>
-                    </Link>
-                    <Button variant="ghost" size="sm" ariaLabel="More options">
-                      <IconMoreHorizontal className="w-3.5 h-3.5" />
-                    </Button>
-                  </div>
-                </td>
-              </tr>
-            ))}
+                    </div>
+                  </td>
+                </>
+              )
+
+              return hasDetailPage ? (
+                <ClickableRow key={review.id} href={rowHref}>
+                  {cells}
+                </ClickableRow>
+              ) : (
+                <tr key={review.id} className={TABLE_ROW_BASE}>
+                  {cells}
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>

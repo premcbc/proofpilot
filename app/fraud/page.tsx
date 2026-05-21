@@ -96,7 +96,7 @@ export default function FraudPage() {
                 </thead>
                 <tbody className="divide-y divide-slate-800/40">
                   {rulesets.map((r) => (
-                    <tr key={r.name} className="group hover:bg-slate-800/30 transition-colors">
+                    <tr key={r.name} className="group hover:bg-slate-800/40 transition-colors duration-200 ease-out">
                       <td className="px-4 py-3 text-xs font-medium text-slate-200">{r.name}</td>
                       <td className="px-4 py-3">
                         <span className="font-mono text-[10px] text-slate-500 bg-slate-800/60 rounded px-1.5 py-0.5">{r.model}</span>

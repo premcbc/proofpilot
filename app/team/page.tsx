@@ -139,7 +139,7 @@ export default function TeamPage() {
               {members.map((m) => {
                 const accuracy = ((m.approvals / m.reviews) * 100).toFixed(1) + '%'
                 return (
-                  <tr key={m.email} className="group hover:bg-slate-800/30 transition-colors">
+                  <tr key={m.email} className="group hover:bg-slate-800/40 transition-colors duration-200 ease-out">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2.5">
                         <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br ${m.color} text-[10px] font-semibold text-white`}>
@@ -169,7 +169,7 @@ export default function TeamPage() {
                     </td>
                     <td className="px-4 py-3 text-xs text-slate-500 hidden lg:table-cell">{m.joined}</td>
                     <td className="px-4 py-3">
-                      <div className="flex justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="flex justify-end opacity-0 translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-[opacity,transform] duration-[180ms] ease-out">
                         <Button variant="ghost" size="sm" ariaLabel="Member options">
                           <IconMoreHorizontal className="w-3.5 h-3.5" />
                         </Button>

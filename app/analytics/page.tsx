@@ -145,7 +145,7 @@ export default function AnalyticsPage() {
             </thead>
             <tbody className="divide-y divide-slate-800/40">
               {topSubmitters.map((s) => (
-                <tr key={s.id} className="hover:bg-slate-800/30 transition-colors group">
+                <tr key={s.id} className="group hover:bg-slate-800/40 transition-colors duration-200 ease-out">
                   <td className="px-4 py-3 font-mono text-xs text-slate-300">{s.id}</td>
                   <td className="px-4 py-3 text-xs text-slate-300">{s.count.toLocaleString()}</td>
                   <td className="px-4 py-3 text-xs font-medium text-slate-200">{s.approvalRate}</td>
