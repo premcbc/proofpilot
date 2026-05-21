@@ -6,7 +6,9 @@
       "Bash(node -e \"try{require.resolve\\('framer-motion'\\);console.log\\('framer-motion: FOUND'\\)}catch\\(e\\){console.log\\('framer-motion: NOT INSTALLED'\\)}\")",
       "Bash(npm install *)",
       "Bash(mkdir -p \"c:\\\\Users\\\\ADMIN\\\\Downloads\\\\proofpilot\\\\app\\\\reviews\\\\[id]\" && mkdir -p \"c:\\\\Users\\\\ADMIN\\\\Downloads\\\\proofpilot\\\\components\\\\review\")",
-      "Bash(dir /s /b app\\\\*.tsx app\\\\*.ts)"
+      "Bash(dir /s /b app\\\\*.tsx app\\\\*.ts)",
+      "Bash(node -e \"const p=require\\('./package.json'\\); console.log\\(p.dependencies['framer-motion']\\)\")",
+      "Bash(npx next *)"
     ],
     "additionalDirectories": [
       "c:\\Users\\ADMIN\\Downloads\\proofpilot\\app\\reviews"
