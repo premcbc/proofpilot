@@ -22,8 +22,9 @@ import {
   TableEmptyState,
   useSortable,
 } from '@/components/ui/table'
+import type { ReviewQueueItem } from '@/lib/queries/reviews'
 
-const reviews = [
+const DEMO_REVIEWS: ReviewQueueItem[] = [
   { id: 'REV-8821', type: 'Screenshot', submitter: 'user_4729', riskScore: 87, status: 'Flagged', submitted: '2m ago', size: '2.4 MB' },
   { id: 'REV-8820', type: 'Document', submitter: 'corp_1193', riskScore: 12, status: 'Pending', submitted: '5m ago', size: '841 KB' },
   { id: 'REV-8819', type: 'Video', submitter: 'user_0034', riskScore: 45, status: 'Pending', submitted: '8m ago', size: '18.2 MB' },
@@ -42,8 +43,16 @@ const typeColors: Record<string, string> = {
 
 const DETAIL_PAGE_IDS = new Set(['REV-8821', 'REV-8820', 'REV-8819'])
 
-export function ReviewQueue() {
-  const { sorted: sortedReviews, sortKey, sortDir, onSort } = useSortable(reviews)
+interface Props {
+  reviews?: ReviewQueueItem[]
+  totalCount?: number
+}
+
+export function ReviewQueue({ reviews, totalCount }: Props) {
+  const data = reviews ?? DEMO_REVIEWS
+  const total = totalCount ?? 134
+
+  const { sorted: sortedReviews, sortKey, sortDir, onSort } = useSortable(data)
 
   return (
     <Card padding="none">
@@ -55,7 +64,7 @@ export function ReviewQueue() {
             </div>
             <div>
               <h3 className="text-sm font-semibold text-slate-100">Review Queue</h3>
-              <p className="text-xs text-slate-500 mt-0.5">134 pending · sorted by risk</p>
+              <p className="text-xs text-slate-500 mt-0.5">{total} pending · sorted by risk</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -75,21 +84,13 @@ export function ReviewQueue() {
         <table className="w-full text-sm">
           <thead className={THEAD_STICKY}>
             <tr className={`border-b border-slate-800/60 ${THEAD_ROW_BG}`}>
-              <SortableHeader sortKey="id" activeKey={sortKey} direction={sortDir} onSort={onSort}>
-                ID
-              </SortableHeader>
-              <SortableHeader sortKey="type" activeKey={sortKey} direction={sortDir} onSort={onSort}>
-                Type
-              </SortableHeader>
+              <SortableHeader sortKey="id" activeKey={sortKey} direction={sortDir} onSort={onSort}>ID</SortableHeader>
+              <SortableHeader sortKey="type" activeKey={sortKey} direction={sortDir} onSort={onSort}>Type</SortableHeader>
               <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500 hidden md:table-cell">
                 Submitter
               </th>
-              <SortableHeader sortKey="riskScore" activeKey={sortKey} direction={sortDir} onSort={onSort}>
-                Risk
-              </SortableHeader>
-              <SortableHeader sortKey="status" activeKey={sortKey} direction={sortDir} onSort={onSort}>
-                Status
-              </SortableHeader>
+              <SortableHeader sortKey="riskScore" activeKey={sortKey} direction={sortDir} onSort={onSort}>Risk</SortableHeader>
+              <SortableHeader sortKey="status" activeKey={sortKey} direction={sortDir} onSort={onSort}>Status</SortableHeader>
               <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500 hidden lg:table-cell">
                 Submitted
               </th>
@@ -114,10 +115,7 @@ export function ReviewQueue() {
                   <>
                     <td className="px-4 py-3.5">
                       {hasDetailPage ? (
-                        <Link
-                          href={rowHref}
-                          className="font-mono text-xs text-slate-300 group-hover:text-indigo-300 transition-colors"
-                        >
+                        <Link href={rowHref} className="font-mono text-xs text-slate-300 group-hover:text-indigo-300 transition-colors">
                           {review.id}
                         </Link>
                       ) : (
@@ -125,9 +123,7 @@ export function ReviewQueue() {
                       )}
                     </td>
                     <td className="px-4 py-3.5">
-                      <span
-                        className={`inline-flex items-center rounded px-2 py-0.5 text-[11px] font-medium ${typeColors[review.type]}`}
-                      >
+                      <span className={`inline-flex items-center rounded px-2 py-0.5 text-[11px] font-medium ${typeColors[review.type] ?? 'text-slate-400 bg-slate-500/8'}`}>
                         {review.type}
                       </span>
                     </td>
@@ -165,13 +161,9 @@ export function ReviewQueue() {
                 )
 
                 return hasDetailPage ? (
-                  <ClickableRow key={review.id} href={rowHref}>
-                    {cells}
-                  </ClickableRow>
+                  <ClickableRow key={review.id} href={rowHref}>{cells}</ClickableRow>
                 ) : (
-                  <tr key={review.id} className={TABLE_ROW_BASE}>
-                    {cells}
-                  </tr>
+                  <tr key={review.id} className={TABLE_ROW_BASE}>{cells}</tr>
                 )
               })
             )}
@@ -180,7 +172,7 @@ export function ReviewQueue() {
       </div>
 
       <div className="flex items-center justify-between px-4 py-3 border-t border-slate-800/60">
-        <p className="text-xs text-slate-500">Showing 8 of 134 reviews</p>
+        <p className="text-xs text-slate-500">Showing {sortedReviews.length} of {total} reviews</p>
         <div className="flex items-center gap-2">
           <Button variant="ghost" size="sm" disabled>Previous</Button>
           <Button variant="secondary" size="sm">Next →</Button>

@@ -8,10 +8,23 @@
       "Bash(mkdir -p \"c:\\\\Users\\\\ADMIN\\\\Downloads\\\\proofpilot\\\\app\\\\reviews\\\\[id]\" && mkdir -p \"c:\\\\Users\\\\ADMIN\\\\Downloads\\\\proofpilot\\\\components\\\\review\")",
       "Bash(dir /s /b app\\\\*.tsx app\\\\*.ts)",
       "Bash(node -e \"const p=require\\('./package.json'\\); console.log\\(p.dependencies['framer-motion']\\)\")",
-      "Bash(npx next *)"
+      "Bash(npx next *)",
+      "Bash(ls -la .env*)",
+      "Bash(ls middleware.ts)",
+      "Bash(ls -la app/auth)",
+      "Bash(ls -la app/login)",
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('version:', d['version']\\)\")",
+      "Bash(node -e \"console.log\\(require\\('./node_modules/next/package.json'\\).version\\)\")",
+      "Bash(node -e \"const d=JSON.parse\\(require\\('fs'\\).readFileSync\\('/dev/stdin','utf8'\\)\\); console.log\\('ssr version:', d.version\\)\")",
+      "Bash(node -e \"console.log\\(require\\('./node_modules/@supabase/ssr/package.json'\\).version\\)\")",
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(d.get\\('version','?'\\)\\); print\\(list\\(d.get\\('exports',{}\\).keys\\(\\)\\)[:10]\\)\")",
+      "Bash(cd c:/Users/ADMIN/Downloads/proofpilot && rm -f app/page.tsx app/reviews/page.tsx \"app/reviews/[id]/page.tsx\" app/reviews/loading.tsx \"app/reviews/[id]/loading.tsx\" app/analytics/page.tsx app/analytics/loading.tsx app/fraud/page.tsx app/fraud/loading.tsx app/team/page.tsx app/team/loading.tsx app/settings/page.tsx app/settings/loading.tsx app/demo/page.tsx app/demo/loading.tsx && echo \"Deleted old pages\")",
+      "Bash(Remove-Item -Recurse -Force .next -ErrorAction SilentlyContinue)",
+      "Bash(Write-Host \"Done\")"
     ],
     "additionalDirectories": [
-      "c:\\Users\\ADMIN\\Downloads\\proofpilot\\app\\reviews"
+      "c:\\Users\\ADMIN\\Downloads\\proofpilot\\app\\reviews",
+      "C:\\Users\\ADMIN\\Downloads\\proofpilot\\app\\reviews\\[id]"
     ]
   }
 }

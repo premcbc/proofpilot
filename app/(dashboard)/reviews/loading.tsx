@@ -13,7 +13,6 @@ const QUEUE_COLUMNS = [
 export default function ReviewsLoading() {
   return (
     <div className="p-4 md:p-6 space-y-5 max-w-[1600px]">
-      {/* Header */}
       <div className="flex items-center justify-between gap-4">
         <div className="space-y-1.5">
           <Skeleton className="h-5 w-20" />
@@ -21,24 +20,17 @@ export default function ReviewsLoading() {
         </div>
         <Skeleton className="h-8 w-28 rounded-md" />
       </div>
-
-      {/* Filter tabs */}
       <div className="flex items-center gap-1 rounded-lg border border-slate-800/80 bg-slate-900/40 p-1 w-fit">
         {['w-10', 'w-16', 'w-14', 'w-14', 'w-16'].map((w, i) => (
           <Skeleton key={i} className={`h-7 ${w} rounded-md`} />
         ))}
       </div>
-
-      {/* Stats grid */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {Array.from({ length: 4 }, (_, i) => <StatCardSkeleton key={i} />)}
       </div>
-
-      {/* Review Queue card */}
       <CardShell>
         <CardHeaderSkeleton actionWidth="w-32" />
         <TableSkeleton rows={8} columns={QUEUE_COLUMNS} />
-        {/* Footer */}
         <div className="flex items-center justify-between px-4 py-3 border-t border-slate-800/60">
           <Skeleton className="h-3 w-32" />
           <div className="flex items-center gap-2">

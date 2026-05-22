@@ -3,7 +3,6 @@ import { Skeleton, CardShell } from '@/components/ui/skeleton'
 export default function DemoLoading() {
   return (
     <div className="p-4 md:p-6 space-y-5 max-w-[1600px]">
-      {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div className="space-y-2">
           <div className="flex items-center gap-2.5 mb-1">
@@ -14,17 +13,12 @@ export default function DemoLoading() {
         </div>
         <Skeleton className="h-6 w-24 rounded-full shrink-0" />
       </div>
-
-      {/* Pipeline steps strip */}
       <div className="flex items-center gap-2 overflow-x-auto pb-1">
         {['w-12', 'w-8', 'w-10', 'w-8', 'w-20', 'w-8', 'w-20', 'w-8', 'w-28', 'w-8', 'w-16'].map((w, i) => (
           <Skeleton key={i} className={`h-3 ${w} shrink-0`} />
         ))}
       </div>
-
-      {/* Simulator card — large placeholder matching the actual simulator layout */}
       <CardShell>
-        {/* Upload zone */}
         <div className="p-6 border-b border-slate-800/60">
           <div className="rounded-xl border-2 border-dashed border-slate-800/80 p-10 flex flex-col items-center gap-3">
             <Skeleton className="h-12 w-12 rounded-xl" />
@@ -33,16 +27,6 @@ export default function DemoLoading() {
             <Skeleton className="h-8 w-28 rounded-md mt-2" />
           </div>
         </div>
-
-        {/* Sample buttons row */}
-        <div className="flex items-center gap-2 px-6 py-4 border-b border-slate-800/60">
-          <Skeleton className="h-3 w-24" />
-          {['w-20', 'w-24', 'w-20'].map((w, i) => (
-            <Skeleton key={i} className={`h-7 ${w} rounded-md`} />
-          ))}
-        </div>
-
-        {/* Analysis area — 3 col grid */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-6">
           {Array.from({ length: 3 }, (_, i) => (
             <div key={i} className="space-y-2.5">

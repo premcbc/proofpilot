@@ -13,95 +13,27 @@ import {
   TableEmptyState,
   useSortable,
 } from '@/components/ui/table'
-
-const members = [
-  {
-    name: 'Prem Chandar',
-    email: 'premcbc23@gmail.com',
-    role: 'Admin',
-    status: 'Active',
-    reviews: 1204,
-    approvals: 1148,
-    joined: 'Jan 2026',
-    initials: 'PC',
-    color: 'from-violet-500 to-indigo-600',
-  },
-  {
-    name: 'Sarah Chen',
-    email: 'schen@proofpilot.ai',
-    role: 'Senior Reviewer',
-    status: 'Active',
-    reviews: 3821,
-    approvals: 3609,
-    joined: 'Nov 2025',
-    initials: 'SC',
-    color: 'from-emerald-500 to-teal-600',
-  },
-  {
-    name: 'Marcus Webb',
-    email: 'mwebb@proofpilot.ai',
-    role: 'Reviewer',
-    status: 'Active',
-    reviews: 2134,
-    approvals: 2019,
-    joined: 'Jan 2026',
-    initials: 'MW',
-    color: 'from-slate-500 to-slate-600',
-  },
-  {
-    name: 'Priya Nair',
-    email: 'pnair@proofpilot.ai',
-    role: 'Reviewer',
-    status: 'Active',
-    reviews: 1892,
-    approvals: 1801,
-    joined: 'Feb 2026',
-    initials: 'PN',
-    color: 'from-purple-500 to-violet-600',
-  },
-  {
-    name: 'James Okafor',
-    email: 'jokafor@proofpilot.ai',
-    role: 'Reviewer',
-    status: 'On leave',
-    reviews: 987,
-    approvals: 934,
-    joined: 'Mar 2026',
-    initials: 'JO',
-    color: 'from-amber-500 to-orange-600',
-  },
-  {
-    name: 'Ana Kovač',
-    email: 'akovac@proofpilot.ai',
-    role: 'Analyst',
-    status: 'Active',
-    reviews: 412,
-    approvals: 390,
-    joined: 'Apr 2026',
-    initials: 'AK',
-    color: 'from-pink-500 to-rose-600',
-  },
-]
-
-// Pre-compute accuracy for sort — defined at module level for stable reference.
-const membersEnhanced = members.map((m) => ({
-  ...m,
-  accuracyNum: m.approvals / m.reviews,
-}))
+import type { TeamMember, TeamStats } from '@/lib/queries/team'
 
 const roleConfig: Record<string, string> = {
   Admin: 'info',
+  Manager: 'info',
   'Senior Reviewer': 'success',
   Reviewer: 'default',
   Analyst: 'warning',
+  Viewer: 'muted',
 }
 
-export default function TeamPage() {
-  const { sorted: sortedMembers, sortKey, sortDir, onSort } = useSortable(membersEnhanced)
+interface Props {
+  initialMembers: TeamMember[]
+  stats: TeamStats
+}
+
+export default function TeamPageClient({ initialMembers, stats }: Props) {
+  const { sorted: sortedMembers, sortKey, sortDir, onSort } = useSortable(initialMembers)
 
   return (
     <div className="p-4 md:p-6 space-y-5 max-w-[1600px]">
-      {/* Header */}
       <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-lg font-bold tracking-tight text-slate-100">Team</h1>
@@ -113,13 +45,15 @@ export default function TeamPage() {
         </Button>
       </div>
 
-      {/* Team stats */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {[
-          { label: 'Total Members', value: '6' },
-          { label: 'Active Now', value: '4' },
-          { label: 'Reviews Today', value: '312' },
-          { label: 'Team Accuracy', value: '94.8%' },
+          { label: 'Total Members', value: stats.totalMembers.toString() },
+          { label: 'Active Now', value: stats.activeNow.toString() },
+          { label: 'Reviews Today', value: stats.reviewsToday.toString() },
+          {
+            label: 'Team Accuracy',
+            value: stats.teamAccuracy > 0 ? stats.teamAccuracy.toFixed(1) + '%' : '—',
+          },
         ].map((s) => (
           <Card key={s.label} padding="md">
             <p className="text-xl font-bold text-slate-100">{s.value}</p>
@@ -128,7 +62,6 @@ export default function TeamPage() {
         ))}
       </div>
 
-      {/* Members table */}
       <Card padding="none">
         <div className="p-4 border-b border-slate-800/60">
           <div className="flex items-center gap-2.5">
@@ -137,7 +70,7 @@ export default function TeamPage() {
             </div>
             <div>
               <h3 className="text-sm font-semibold text-slate-100">Team Members</h3>
-              <p className="text-xs text-slate-500 mt-0.5">{members.length} members</p>
+              <p className="text-xs text-slate-500 mt-0.5">{initialMembers.length} members</p>
             </div>
           </div>
         </div>
@@ -151,40 +84,16 @@ export default function TeamPage() {
                 <SortableHeader sortKey="role" activeKey={sortKey} direction={sortDir} onSort={onSort}>
                   Role
                 </SortableHeader>
-                <SortableHeader
-                  sortKey="status"
-                  activeKey={sortKey}
-                  direction={sortDir}
-                  onSort={onSort}
-                  className="hidden sm:table-cell"
-                >
+                <SortableHeader sortKey="status" activeKey={sortKey} direction={sortDir} onSort={onSort} className="hidden sm:table-cell">
                   Status
                 </SortableHeader>
-                <SortableHeader
-                  sortKey="reviews"
-                  activeKey={sortKey}
-                  direction={sortDir}
-                  onSort={onSort}
-                  className="hidden md:table-cell"
-                >
+                <SortableHeader sortKey="reviews" activeKey={sortKey} direction={sortDir} onSort={onSort} className="hidden md:table-cell">
                   Reviews
                 </SortableHeader>
-                <SortableHeader
-                  sortKey="accuracyNum"
-                  activeKey={sortKey}
-                  direction={sortDir}
-                  onSort={onSort}
-                  className="hidden lg:table-cell"
-                >
+                <SortableHeader sortKey="accuracyNum" activeKey={sortKey} direction={sortDir} onSort={onSort} className="hidden lg:table-cell">
                   Accuracy
                 </SortableHeader>
-                <SortableHeader
-                  sortKey="joined"
-                  activeKey={sortKey}
-                  direction={sortDir}
-                  onSort={onSort}
-                  className="hidden lg:table-cell"
-                >
+                <SortableHeader sortKey="joined" activeKey={sortKey} direction={sortDir} onSort={onSort} className="hidden lg:table-cell">
                   Joined
                 </SortableHeader>
                 <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-wider text-slate-500" />
@@ -206,17 +115,14 @@ export default function TeamPage() {
                 />
               ) : (
                 sortedMembers.map((m) => {
-                  const accuracy = ((m.approvals / m.reviews) * 100).toFixed(1) + '%'
+                  const accuracy = m.reviews > 0
+                    ? ((m.approvals / m.reviews) * 100).toFixed(1) + '%'
+                    : '—'
                   return (
-                    <tr
-                      key={m.email}
-                      className="group hover:bg-slate-800/40 transition-colors duration-150 ease-out"
-                    >
+                    <tr key={m.email} className="group hover:bg-slate-800/40 transition-colors duration-150 ease-out">
                       <td className="px-4 py-3.5">
                         <div className="flex items-center gap-2.5">
-                          <div
-                            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br ${m.color} text-[10px] font-semibold text-white`}
-                          >
+                          <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br ${m.color} text-[10px] font-semibold text-white`}>
                             {m.initials}
                           </div>
                           <div>
@@ -226,7 +132,7 @@ export default function TeamPage() {
                         </div>
                       </td>
                       <td className="px-4 py-3.5">
-                        <Badge variant={roleConfig[m.role] as 'info' | 'success' | 'default' | 'warning'}>
+                        <Badge variant={roleConfig[m.role] as 'info' | 'success' | 'default' | 'warning' | 'muted'}>
                           {m.role}
                         </Badge>
                       </td>
