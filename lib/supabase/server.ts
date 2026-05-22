@@ -1,6 +1,7 @@
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import type { Database } from './types'
+import { getCurrentMembership } from './org'
 
 export async function createClient() {
   const cookieStore = await cookies()
@@ -36,16 +37,8 @@ export async function getCurrentUser() {
 export async function getCurrentOrgId(
   supabase: Awaited<ReturnType<typeof createClient>>
 ): Promise<string | null> {
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return null
-
-  const { data } = await supabase
-    .from('profiles')
-    .select('organization_id')
-    .eq('id', user.id)
-    .single()
-
-  return (data as { organization_id: string | null } | null)?.organization_id ?? null
+  const membership = await getCurrentMembership(supabase)
+  return membership?.organization_id ?? null
 }
 
 export async function getCurrentProfile() {

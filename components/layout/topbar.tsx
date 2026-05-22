@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import Link from 'next/link'
 import { IconSearch, IconBell, IconMenu, IconPlus, IconRefresh } from '@/components/icons'
 import type { UserProfile } from './dashboard-layout'
 
@@ -55,10 +56,13 @@ export function Topbar({ onMenuClick, profile }: TopbarProps) {
           <span>Refresh</span>
         </button>
 
-        <button className="flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 transition-colors shadow-lg shadow-indigo-600/20">
+        <Link
+          href="/reviews/new"
+          className="flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 transition-colors shadow-lg shadow-indigo-600/20"
+        >
           <IconPlus className="w-3.5 h-3.5" />
           <span className="hidden sm:inline">New Review</span>
-        </button>
+        </Link>
 
         {/* Notifications */}
         <button

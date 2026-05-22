@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { Database, Review } from '@/lib/supabase/types'
+import type { Database } from '@/lib/supabase/types'
 
 export interface ReviewQueueItem {
   id: string
@@ -26,15 +26,17 @@ function timeAgo(dateStr: string): string {
   return `${Math.floor(hrs / 24)}d ago`
 }
 
-function toQueueItem(r: Review): ReviewQueueItem {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function toQueueItem(r: any): ReviewQueueItem {
+  const status = r.status ?? 'pending'
   return {
-    id: r.external_id,
-    type: r.file_type ?? 'Screenshot',
-    submitter: r.submitter,
-    riskScore: r.risk_score,
-    status: r.status.charAt(0).toUpperCase() + r.status.slice(1),
-    submitted: timeAgo(r.submitted_at),
-    size: r.file_size ?? '—',
+    id: r.review_code ?? r.id,
+    type: r.type ?? 'Upload',
+    submitter: r.submitted_by ?? '—',
+    riskScore: r.risk_score ?? 0,
+    status: status.charAt(0).toUpperCase() + status.slice(1),
+    submitted: timeAgo(r.created_at),
+    size: '—',
   }
 }
 
@@ -57,12 +59,13 @@ export async function getReviewQueue(
       countQuery = countQuery.eq('status', status.toLowerCase())
     }
 
-    let dataQuery = supabase
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let dataQuery = (supabase as any)
       .from('reviews')
-      .select('*')
+      .select('id, review_code, type, submitted_by, risk_score, status, created_at')
       .eq('organization_id', orgId)
-      .order('risk_score', { ascending: false })
-      .order('submitted_at', { ascending: false })
+      .order('risk_score', { ascending: false, nullsFirst: false })
+      .order('created_at', { ascending: false })
       .limit(limit)
 
     if (status && status !== 'All') {
@@ -72,7 +75,8 @@ export async function getReviewQueue(
     const [countRes, dataRes] = await Promise.all([countQuery, dataQuery])
 
     const totalCount = countRes.count ?? 0
-    const reviews = ((dataRes.data ?? []) as Review[]).map(toQueueItem)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const reviews = ((dataRes.data ?? []) as any[]).map(toQueueItem)
 
     return { reviews, totalCount }
   } catch {
@@ -134,37 +138,27 @@ export async function getReviewPageMetrics(
     const today = new Date()
     today.setHours(0, 0, 0, 0)
 
-    const [todayRes, slaRes] = await Promise.all([
-      supabase
-        .from('reviews')
-        .select('status')
-        .eq('organization_id', orgId)
-        .gte('created_at', today.toISOString()),
-
-      supabase
-        .from('reviews')
-        .select('sla_status')
-        .eq('organization_id', orgId)
-        .gte('created_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()),
-    ])
+    const todayRes = await supabase
+      .from('reviews')
+      .select('status')
+      .eq('organization_id', orgId)
+      .gte('created_at', today.toISOString())
 
     const todayReviews = (todayRes.data ?? []) as Array<{ status: string }>
     const approved = todayReviews.filter((r) => r.status === 'approved').length
+    const escalated = todayReviews.filter((r) => r.status === 'escalated').length
     const autoApprovedPct = todayReviews.length > 0
       ? ((approved / todayReviews.length) * 100).toFixed(1) + '%'
       : '—'
-
-    const slaReviews = (slaRes.data ?? []) as Array<{ sla_status: string | null }>
-    const onTrack = slaReviews.filter((r) => r.sla_status === 'on-track').length
-    const slaCompliance = slaReviews.length > 0
-      ? ((onTrack / slaReviews.length) * 100).toFixed(1) + '%'
+    const escalationRate = todayReviews.length > 0
+      ? ((escalated / todayReviews.length) * 100).toFixed(1) + '%'
       : '—'
 
     return {
       avgReviewTime: '—',
-      slaCompliance,
+      slaCompliance: '—',
       autoApproved: autoApprovedPct,
-      escalationRate: '—',
+      escalationRate,
     }
   } catch {
     return { avgReviewTime: '—', slaCompliance: '—', autoApproved: '—', escalationRate: '—' }

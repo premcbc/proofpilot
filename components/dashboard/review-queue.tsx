@@ -13,7 +13,6 @@ import {
 } from '@/components/icons'
 import {
   ClickableRow,
-  TABLE_ROW_BASE,
   TABLE_ACTION_REVEAL,
   TABLE_SCROLL_WRAPPER,
   THEAD_STICKY,
@@ -40,8 +39,6 @@ const typeColors: Record<string, string> = {
   Document: 'text-violet-400 bg-violet-500/8',
   Video: 'text-sky-400 bg-sky-500/8',
 }
-
-const DETAIL_PAGE_IDS = new Set(['REV-8821', 'REV-8820', 'REV-8819'])
 
 interface Props {
   reviews?: ReviewQueueItem[]
@@ -109,18 +106,13 @@ export function ReviewQueue({ reviews, totalCount }: Props) {
               />
             ) : (
               sortedReviews.map((review) => {
-                const hasDetailPage = DETAIL_PAGE_IDS.has(review.id)
                 const rowHref = `/reviews/${review.id}`
                 const cells = (
                   <>
                     <td className="px-4 py-3.5">
-                      {hasDetailPage ? (
-                        <Link href={rowHref} className="font-mono text-xs text-slate-300 group-hover:text-indigo-300 transition-colors">
-                          {review.id}
-                        </Link>
-                      ) : (
-                        <span className="font-mono text-xs text-slate-300">{review.id}</span>
-                      )}
+                      <Link href={rowHref} className="font-mono text-xs text-slate-300 group-hover:text-indigo-300 transition-colors">
+                        {review.id}
+                      </Link>
                     </td>
                     <td className="px-4 py-3.5">
                       <span className={`inline-flex items-center rounded px-2 py-0.5 text-[11px] font-medium ${typeColors[review.type] ?? 'text-slate-400 bg-slate-500/8'}`}>
@@ -141,17 +133,11 @@ export function ReviewQueue({ reviews, totalCount }: Props) {
                     </td>
                     <td className="px-4 py-3.5">
                       <div className={`flex items-center justify-end gap-1 ${TABLE_ACTION_REVEAL}`}>
-                        {hasDetailPage ? (
-                          <Link href={rowHref}>
-                            <Button variant="ghost" size="sm" ariaLabel="View review">
-                              <IconEye className="w-3.5 h-3.5" />
-                            </Button>
-                          </Link>
-                        ) : (
+                        <Link href={rowHref}>
                           <Button variant="ghost" size="sm" ariaLabel="View review">
                             <IconEye className="w-3.5 h-3.5" />
                           </Button>
-                        )}
+                        </Link>
                         <Button variant="ghost" size="sm" ariaLabel="More options">
                           <IconMoreHorizontal className="w-3.5 h-3.5" />
                         </Button>
@@ -160,10 +146,8 @@ export function ReviewQueue({ reviews, totalCount }: Props) {
                   </>
                 )
 
-                return hasDetailPage ? (
+                return (
                   <ClickableRow key={review.id} href={rowHref}>{cells}</ClickableRow>
-                ) : (
-                  <tr key={review.id} className={TABLE_ROW_BASE}>{cells}</tr>
                 )
               })
             )}

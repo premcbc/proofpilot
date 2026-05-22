@@ -4,10 +4,33 @@ import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 
-export type AuthState = { error: string } | { success: string } | null
+export type AuthState =
+  | { error: string }
+  | { success: string; email?: string }
+  | { rateLimited: string; email: string }
+  | { unconfirmed: string; email: string }
+  | null
 
-function slugify(str: string): string {
-  return str.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+function isRateLimitError(message: string): boolean {
+  const m = message.toLowerCase()
+  return (
+    m.includes('rate limit') ||
+    m.includes('over_email_send_rate_limit') ||
+    (m.includes('for security purposes') && m.includes('60 seconds'))
+  )
+}
+
+function mapAuthError(message: string): string {
+  const m = message.toLowerCase()
+  if (m.includes('user already registered') || m.includes('already registered'))
+    return 'An account with this email already exists. Try signing in instead.'
+  if (isRateLimitError(message))
+    return 'Too many confirmation emails requested. Please wait a few minutes before trying again.'
+  if (m.includes('invalid email') || m.includes('unable to validate email'))
+    return 'Please enter a valid email address.'
+  if (m.includes('weak password') || m.includes('password should be'))
+    return 'Password is too weak. Please choose a stronger password.'
+  return message
 }
 
 async function getOrigin(): Promise<string> {
@@ -32,7 +55,12 @@ export async function signInWithPassword(
   const supabase = await createClient()
   const { error } = await supabase.auth.signInWithPassword({ email, password })
 
-  if (error) return { error: error.message }
+  if (error) {
+    if (error.message === 'Email not confirmed') {
+      return { unconfirmed: 'Please confirm your email before signing in. Check your inbox for a confirmation link.', email }
+    }
+    return { error: mapAuthError(error.message) }
+  }
 
   const destination = redirectTo?.startsWith('/') ? redirectTo : '/'
   redirect(destination)
@@ -62,33 +90,37 @@ export async function signUpWithPassword(
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
-    options: { data: { full_name: fullName } },
+    // Store org_name in metadata so the auth callback can bootstrap without
+    // requiring another round-trip through /onboarding.
+    options: { data: { full_name: fullName, org_name: orgName } },
   })
 
-  if (error) return { error: error.message }
-  if (!data?.user) return { error: 'Failed to create account. Please try again.' }
+  if (error) {
+    if (isRateLimitError(error.message)) {
+      return {
+        rateLimited: 'Your account may already be created. Please wait a few minutes, then use "Resend confirmation email" or try signing in.',
+        email,
+      }
+    }
+    return { error: mapAuthError(error.message) }
+  }
 
-  // Email confirmation required — org will be bootstrapped after confirmation
+  // No session = email confirmation is required.
+  // Supabase may also return data.user = null in this case (enumeration protection),
+  // so we check for the session FIRST — the absence of a session is the canonical
+  // signal that the user must verify their email before proceeding.
   if (!data.session) {
-    return { success: 'Check your email to confirm your account, then sign in.' }
+    return { success: 'Check your email to confirm your account, then sign in.', email }
   }
 
-  const slug = slugify(orgName)
+  // Immediate sign-in (email confirmation disabled) — bootstrap everything now.
+  const user = data.user
+  if (!user) return { error: 'Failed to create account. Please try again.' }
 
-  const { data: orgId, error: orgError } = await supabase.rpc('create_organization', {
-    org_name: orgName,
-    org_slug: `${slug}-${Date.now().toString(36)}`,
-  }) as { data: string | null; error: { message: string } | null }
-
-  if (orgError || !orgId) {
-    return { error: `Account created but failed to set up organization: ${orgError?.message ?? 'unknown error'}` }
+  const result = await bootstrapOrg(user.id, email, fullName, orgName)
+  if ('error' in result) {
+    return { error: `Account created but failed to set up organization: ${result.error}` }
   }
-
-  await supabase.from('profiles').upsert({
-    id: data.user.id,
-    email,
-    full_name: fullName,
-  })
 
   redirect('/')
 }
@@ -105,6 +137,27 @@ export async function signInWithGoogle() {
 
   if (error) return { error: error.message }
   if (data.url) redirect(data.url)
+}
+
+// ── resend confirmation ───────────────────────────────────────────────────────
+
+export async function resendConfirmationEmail(
+  _prevState: AuthState,
+  formData: FormData
+): Promise<AuthState> {
+  const email = (formData.get('email') as string)?.trim()
+  if (!email) return { error: 'Email is required.' }
+
+  const supabase = await createClient()
+  const { error } = await supabase.auth.resend({ type: 'signup', email })
+
+  if (error) {
+    if (isRateLimitError(error.message)) {
+      return { rateLimited: 'Too many confirmation emails requested. Please wait a few minutes before trying again.', email }
+    }
+    return { error: mapAuthError(error.message) }
+  }
+  return { success: 'Confirmation email resent. Check your inbox.', email }
 }
 
 // ── sign-out ──────────────────────────────────────────────────────────────────
@@ -124,6 +177,12 @@ export async function bootstrapOrg(userId: string, email: string, displayName: s
   const slug = email.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '-')
   const orgName = providedOrgName || displayName || email.split('@')[0]
 
+  // Profile must exist before org creation (organizations.created_by FK → profiles.id)
+  await supabase.from('profiles').upsert(
+    { id: userId, email, full_name: displayName || null },
+    { onConflict: 'id' }
+  )
+
   const { data: orgId, error: orgError } = await supabase.rpc('create_organization', {
     org_name: orgName,
     org_slug: slug + '-' + Date.now().toString(36),
@@ -133,11 +192,15 @@ export async function bootstrapOrg(userId: string, email: string, displayName: s
     return { error: orgError?.message ?? 'Failed to create organization' }
   }
 
-  await supabase.from('profiles').upsert({
-    id: userId,
-    email,
-    full_name: displayName || null,
-  })
+  const now = new Date().toISOString()
+
+  // Upsert so it's idempotent if the RPC already created a row
+  await supabase
+    .from('organization_members')
+    .upsert(
+      { organization_id: orgId, user_id: userId, role: 'owner', status: 'active', accepted_at: now },
+      { onConflict: 'organization_id,user_id', ignoreDuplicates: false }
+    )
 
   return { orgId }
 }

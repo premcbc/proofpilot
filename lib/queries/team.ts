@@ -22,9 +22,8 @@ export interface TeamStats {
 }
 
 const ROLE_DISPLAY: Record<string, string> = {
+  owner: 'Owner',
   admin: 'Admin',
-  manager: 'Manager',
-  senior_reviewer: 'Senior Reviewer',
   reviewer: 'Reviewer',
   analyst: 'Analyst',
   viewer: 'Viewer',
@@ -32,8 +31,9 @@ const ROLE_DISPLAY: Record<string, string> = {
 
 const STATUS_DISPLAY: Record<string, string> = {
   active: 'Active',
-  on_leave: 'On leave',
+  invited: 'Invited',
   inactive: 'Inactive',
+  suspended: 'Suspended',
 }
 
 function formatJoined(dateStr: string): string {
@@ -41,23 +41,23 @@ function formatJoined(dateStr: string): string {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function toTeamMember(p: any): TeamMember {
-  const name: string = p.full_name ?? p.email ?? 'Unknown'
-  const reviews: number = p.reviews_count ?? 0
-  const approvals: number = p.approvals_count ?? 0
-  const accuracyNum = reviews > 0 ? approvals / reviews : 0
+function toTeamMember(m: any): TeamMember {
+  const profile = m.profiles ?? null
+  const name: string = profile?.full_name ?? m.invited_email ?? 'Unknown'
+  const email: string = profile?.email ?? m.invited_email ?? ''
   const initials = name.slice(0, 2).toUpperCase()
+  const joinedDate = m.accepted_at ?? m.created_at
   return {
     name,
-    email: p.email ?? '',
-    role: ROLE_DISPLAY[p.role] ?? p.role ?? 'Member',
-    status: STATUS_DISPLAY[p.status] ?? p.status ?? 'Active',
-    reviews,
-    approvals,
-    joined: p.joined_at ? formatJoined(p.joined_at) : p.created_at ? formatJoined(p.created_at) : '—',
-    initials: p.initials ?? initials,
-    color: p.color ?? 'from-slate-500 to-slate-600',
-    accuracyNum,
+    email,
+    role: ROLE_DISPLAY[m.role] ?? m.role ?? 'Member',
+    status: STATUS_DISPLAY[m.status] ?? m.status ?? 'Active',
+    reviews: 0,
+    approvals: 0,
+    joined: joinedDate ? formatJoined(joinedDate) : '—',
+    initials,
+    color: 'from-slate-500 to-slate-600',
+    accuracyNum: 0,
   }
 }
 
@@ -70,8 +70,8 @@ export async function getTeamMembers(
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data, error } = await (supabase as any)
-      .from('profiles')
-      .select('*')
+      .from('organization_members')
+      .select('id, role, status, accepted_at, invited_email, created_at, profiles!user_id(full_name, email)')
       .eq('organization_id', orgId)
       .order('created_at', { ascending: false })
 
@@ -95,10 +95,9 @@ export async function getTeamStats(
     today.setHours(0, 0, 0, 0)
 
     const [membersRes, reviewsTodayRes] = await Promise.all([
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (supabase as any)
-        .from('profiles')
-        .select('status, reviews_count, approvals_count')
+      supabase
+        .from('organization_members')
+        .select('status')
         .eq('organization_id', orgId),
 
       supabase
@@ -108,17 +107,14 @@ export async function getTeamStats(
         .gte('created_at', today.toISOString()),
     ])
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const members = (membersRes.data ?? []) as any[]
-    const totalMembers = members.length
-    const activeNow = members.filter((m) => m.status === 'active').length
-    const reviewsToday = reviewsTodayRes.count ?? 0
-
-    const totalReviews = members.reduce((s: number, m: { reviews_count?: number }) => s + (m.reviews_count ?? 0), 0)
-    const totalApprovals = members.reduce((s: number, m: { approvals_count?: number }) => s + (m.approvals_count ?? 0), 0)
-    const teamAccuracy = totalReviews > 0 ? (totalApprovals / totalReviews) * 100 : 0
-
-    return { totalMembers, activeNow, reviewsToday, teamAccuracy }
+    const members = (membersRes.data ?? []) as Array<{ status: string }>
+    const active = members.filter((m) => m.status === 'active')
+    return {
+      totalMembers: members.length,
+      activeNow: active.length,
+      reviewsToday: reviewsTodayRes.count ?? 0,
+      teamAccuracy: 0,
+    }
   } catch {
     return defaults
   }

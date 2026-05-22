@@ -1,7 +1,8 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { createClient, getCurrentOrgId } from '@/lib/supabase/server'
+import { createClient } from '@/lib/supabase/server'
+import { getCurrentMembership, canReview } from '@/lib/supabase/org'
 
 export type ReviewDecision = 'approved' | 'rejected' | 'flagged' | 'escalated'
 
@@ -12,9 +13,12 @@ export async function submitReviewDecision(
 ) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const supabase = (await createClient()) as any
-  const orgId = await getCurrentOrgId(supabase)
+  const membership = await getCurrentMembership(supabase)
 
-  if (!orgId) return { error: 'Unauthorized' }
+  if (!membership) return { error: 'Unauthorized' }
+  if (!canReview(membership.role)) return { error: 'You do not have permission to submit review decisions.' }
+
+  const orgId = membership.organization_id
 
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Unauthorized' }
@@ -22,7 +26,7 @@ export async function submitReviewDecision(
   const { data: reviewRow, error: reviewError } = await supabase
     .from('reviews')
     .select('id, organization_id')
-    .eq('external_id', reviewExternalId)
+    .eq('review_code', reviewExternalId)
     .eq('organization_id', orgId)
     .single()
 
@@ -45,26 +49,15 @@ export async function submitReviewDecision(
 
   if (updateError) return { error: updateError.message }
 
-  await supabase.from('review_audit_log').insert({
-    review_id: review.id,
+  await supabase.from('audit_logs').insert({
     organization_id: orgId,
-    actor,
-    actor_type: 'human',
-    action: decision.charAt(0).toUpperCase() + decision.slice(1),
-    detail: note ?? `Decision: ${decision}`,
-    action_type: decision,
-  })
-
-  await supabase.from('activity_log').insert({
-    organization_id: orgId,
-    review_id: review.id,
-    review_external_id: reviewExternalId,
+    actor_id: user.id,
+    actor_type: 'user',
+    actor_label: actor,
+    entity_type: 'review',
+    entity_id: review.id,
     action: decision,
-    actor,
-    actor_type: 'human',
-    initials: actor.slice(0, 2).toUpperCase(),
-    color: 'from-slate-500 to-slate-600',
-    detail: note ?? null,
+    after_state: { status: decision, note: note ?? null },
   })
 
   revalidatePath('/')

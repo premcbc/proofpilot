@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { Database, FraudAlert, FraudRule } from '@/lib/supabase/types'
+import type { Database, FraudAlert } from '@/lib/supabase/types'
 
 export interface FraudAlertItem {
   id: string
@@ -44,6 +44,7 @@ function normalizeSeverity(s: string): string {
     high: 'High',
     medium: 'Medium',
     low: 'Low',
+    none: 'None',
   }
   return map[s.toLowerCase()] ?? s
 }
@@ -51,11 +52,11 @@ function normalizeSeverity(s: string): string {
 function toAlertItem(a: FraudAlert): FraudAlertItem {
   return {
     id: a.id,
-    type: a.signal_type,
-    detail: a.detail ?? '—',
+    type: a.title,
+    detail: a.description ?? '—',
     severity: normalizeSeverity(a.severity),
     time: timeAgo(a.created_at),
-    count: a.event_count,
+    count: 1,
     description: a.description ?? '',
   }
 }
@@ -72,7 +73,7 @@ export async function getFraudAlerts(
   try {
     const { data, error } = await supabase
       .from('fraud_alerts')
-      .select('*')
+      .select('id, title, description, severity, status, created_at, updated_at, organization_id, review_id, signal_id, assigned_to, acknowledged_by, acknowledged_at, resolved_by, resolved_at, metadata')
       .eq('organization_id', orgId)
       .order('created_at', { ascending: false })
       .limit(limit)
@@ -84,36 +85,13 @@ export async function getFraudAlerts(
   }
 }
 
-function toRuleItem(r: FraudRule): FraudRuleItem {
-  const accuracyNum = r.accuracy ?? 0
-  return {
-    name: r.name,
-    status: r.status.charAt(0).toUpperCase() + r.status.slice(1),
-    detections: r.detections,
-    accuracy: r.accuracy_display ?? (accuracyNum > 0 ? accuracyNum.toFixed(1) + '%' : '—'),
-    accuracyNum,
-    model: r.model ?? '—',
-  }
-}
-
 export async function getFraudRules(
-  supabase: SupabaseClient<Database>,
-  orgId: string | null
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _supabase: SupabaseClient<Database>,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _orgId: string | null
 ): Promise<FraudRuleItem[]> {
-  if (!orgId) return []
-
-  try {
-    const { data, error } = await supabase
-      .from('fraud_rules')
-      .select('*')
-      .eq('organization_id', orgId)
-      .order('detections', { ascending: false })
-
-    if (error || !data) return []
-    return (data as FraudRule[]).map(toRuleItem)
-  } catch {
-    return []
-  }
+  return []
 }
 
 export async function getFraudPageStats(
@@ -133,18 +111,13 @@ export async function getFraudPageStats(
     const today = new Date()
     today.setHours(0, 0, 0, 0)
 
-    const [blockedRes, rulesRes, alertsRes] = await Promise.all([
+    const [blockedRes, alertsRes] = await Promise.all([
       supabase
         .from('reviews')
         .select('id', { count: 'exact', head: true })
         .eq('organization_id', orgId)
         .in('status', ['flagged', 'rejected'])
         .gte('created_at', today.toISOString()),
-
-      supabase
-        .from('fraud_rules')
-        .select('status')
-        .eq('organization_id', orgId),
 
       supabase
         .from('fraud_alerts')
@@ -154,10 +127,6 @@ export async function getFraudPageStats(
     ])
 
     const blockedToday = blockedRes.count ?? 0
-    const rules = (rulesRes.data ?? []) as Array<{ status: string }>
-    const active = rules.filter((r) => r.status === 'active').length
-    const rulesActive = `${active}/${rules.length}`
-
     const alerts = (alertsRes.data ?? []) as Array<{ severity: string }>
     const criticalCount = alerts.filter((a) => a.severity.toLowerCase() === 'critical').length
 
@@ -165,7 +134,7 @@ export async function getFraudPageStats(
       blockedToday,
       detectionRate: '—',
       falsePositiveRate: '—',
-      rulesActive,
+      rulesActive: '—',
       criticalCount,
     }
   } catch {

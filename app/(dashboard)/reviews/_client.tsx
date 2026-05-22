@@ -1,9 +1,9 @@
 'use client'
 
 import { useState } from 'react'
+import Link from 'next/link'
 import { ReviewQueue } from '@/components/dashboard/review-queue'
 import { Card } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
 import { IconPlus } from '@/components/icons'
 import type { ReviewQueueItem, ReviewStatusCounts, ReviewPageMetrics } from '@/lib/queries/reviews'
 
@@ -32,10 +32,13 @@ export default function ReviewsPageClient({ initialReviews, totalCount, counts, 
           <h1 className="text-lg font-bold tracking-tight text-slate-100">Reviews</h1>
           <p className="text-sm text-slate-500 mt-0.5">Manage and process all submitted content</p>
         </div>
-        <Button variant="primary" size="md">
+        <Link
+          href="/reviews/new"
+          className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 transition-colors shadow-lg shadow-indigo-600/20"
+        >
           <IconPlus className="w-4 h-4" />
           New Review
-        </Button>
+        </Link>
       </div>
 
       <div className="flex items-center gap-1 rounded-lg border border-slate-800/80 bg-slate-900/40 p-1 w-fit">

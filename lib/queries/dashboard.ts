@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { Database, ActivityEvent } from '@/lib/supabase/types'
+import type { Database } from '@/lib/supabase/types'
 
 export interface DashboardMetrics {
   totalReviews: number
@@ -105,26 +105,33 @@ export async function getActivityFeed(
   const { limit = 6 } = options
 
   try {
-    const { data, error } = await supabase
-      .from('activity_log')
-      .select('*')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await (supabase as any)
+      .from('review_actions')
+      .select('id, action_type, note, created_at, review_id, reviews!review_id(review_code), profiles!actor_id(full_name, email)')
       .eq('organization_id', orgId)
       .order('created_at', { ascending: false })
       .limit(limit)
 
     if (error || !data) return []
 
-    return data.map((e: ActivityEvent) => ({
-      id: e.id,
-      action: e.action,
-      item: e.review_external_id ?? e.review_id ?? '—',
-      by: e.actor,
-      initials: e.initials ?? e.actor.slice(0, 2).toUpperCase(),
-      color: e.color ?? 'from-slate-500 to-slate-600',
-      time: timeAgo(e.created_at),
-      detail: e.detail ?? '',
-      createdAt: e.created_at,
-    }))
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (data as any[]).map((e) => {
+      const profile = e.profiles ?? null
+      const by: string = profile?.full_name ?? profile?.email ?? 'Unknown'
+      const reviewCode: string = e.reviews?.review_code ?? e.review_id ?? '—'
+      return {
+        id: e.id,
+        action: e.action_type ?? '—',
+        item: reviewCode,
+        by,
+        initials: by.slice(0, 2).toUpperCase(),
+        color: 'from-slate-500 to-slate-600',
+        time: timeAgo(e.created_at),
+        detail: e.note ?? '',
+        createdAt: e.created_at,
+      }
+    })
   } catch {
     return []
   }

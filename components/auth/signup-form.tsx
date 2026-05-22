@@ -1,18 +1,47 @@
 'use client'
 
-import { useActionState, useTransition } from 'react'
+import { useActionState, useEffect, useRef, useState, useTransition } from 'react'
 import Link from 'next/link'
-import { signUpWithPassword, signInWithGoogle } from '@/lib/actions/auth'
+import { signUpWithPassword, signInWithGoogle, resendConfirmationEmail } from '@/lib/actions/auth'
 import { IconShieldAlert } from '@/components/icons'
 import { Spinner, GoogleIcon } from '@/components/auth/auth-shared'
 
 export function SignupForm() {
   const [state, action, isPending] = useActionState(signUpWithPassword, null)
+  const [resendState, resendAction, isResendPending] = useActionState(resendConfirmationEmail, null)
   const [isGooglePending, startGoogleTransition] = useTransition()
+  const [cooldown, setCooldown] = useState(0)
+  const prevResendPendingRef = useRef(false)
 
   const error = state && 'error' in state ? state.error : null
-  const success = state && 'success' in state ? state.success : null
+  const isEmailScreen = !!(state && ('success' in state || 'rateLimited' in state))
+  const isRateLimited = !!(state && 'rateLimited' in state)
+  const pendingEmail =
+    state && ('success' in state || 'rateLimited' in state || 'unconfirmed' in state)
+      ? (state as { email?: string }).email
+      : undefined
   const anyPending = isPending || isGooglePending
+
+  const resendError = resendState && 'error' in resendState ? resendState.error : null
+  const resendRateLimited = resendState && 'rateLimited' in resendState
+    ? (resendState as { rateLimited: string }).rateLimited
+    : null
+  const resendSuccess = resendState && 'success' in resendState
+
+  // Start 60s cooldown when a resend action completes
+  useEffect(() => {
+    if (prevResendPendingRef.current && !isResendPending) {
+      setCooldown(60)
+    }
+    prevResendPendingRef.current = isResendPending
+  }, [isResendPending])
+
+  // Decrement cooldown every second
+  useEffect(() => {
+    if (cooldown <= 0) return
+    const timer = setTimeout(() => setCooldown(c => c - 1), 1000)
+    return () => clearTimeout(timer)
+  }, [cooldown])
 
   function handleGoogleSignIn() {
     startGoogleTransition(async () => {
@@ -33,19 +62,72 @@ export function SignupForm() {
 
       {/* Card */}
       <div className="rounded-xl border border-slate-800/80 bg-slate-900/60 p-6 shadow-2xl backdrop-blur-sm">
-        {success ? (
-          /* Success state */
-          <div className="py-4 text-center">
-            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-400">
-              <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+        {isEmailScreen ? (
+          <div className="py-2 text-center">
+            <div className={`mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full ${isRateLimited ? 'bg-amber-500/10 text-amber-400' : 'bg-emerald-500/10 text-emerald-400'}`}>
+              <svg className="h-7 w-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75" />
               </svg>
             </div>
-            <h2 className="mb-2 text-sm font-semibold text-slate-200">Check your email</h2>
-            <p className="text-xs text-slate-500 leading-relaxed">{success}</p>
+
+            <h2 className="mb-1.5 text-sm font-semibold text-slate-200">
+              {isRateLimited ? 'Too many requests' : 'Check your email'}
+            </h2>
+
+            {isRateLimited ? (
+              <p className="text-xs text-slate-500 leading-relaxed">
+                {(state as { rateLimited: string }).rateLimited}
+              </p>
+            ) : (
+              <>
+                <p className="text-xs text-slate-500 leading-relaxed">We sent a confirmation link to</p>
+                {pendingEmail && (
+                  <p className="mt-0.5 text-xs font-medium text-slate-300">{pendingEmail}</p>
+                )}
+                <p className="mt-2 text-xs text-slate-500 leading-relaxed">
+                  Click the link in the email to activate your account.
+                </p>
+              </>
+            )}
+
+            <div className="mt-5 border-t border-slate-800 pt-4">
+              {resendSuccess ? (
+                <p className="text-xs text-emerald-400">Confirmation email resent. Check your inbox.</p>
+              ) : (
+                <>
+                  {(resendError || resendRateLimited) && (
+                    <p className="mb-2 text-xs text-amber-400">{resendRateLimited ?? resendError}</p>
+                  )}
+                  {!resendRateLimited && (
+                    <>
+                      <p className="mb-2 text-xs text-slate-600">
+                        {isRateLimited ? 'Try again after waiting:' : "Didn't receive it?"}
+                      </p>
+                      <form action={resendAction}>
+                        {pendingEmail && <input type="hidden" name="email" value={pendingEmail} />}
+                        <button
+                          type="submit"
+                          disabled={isResendPending || cooldown > 0 || !pendingEmail}
+                          className="inline-flex items-center gap-1.5 rounded-md border border-slate-700 bg-slate-800/60 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-700/60 hover:text-slate-100 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+                        >
+                          {isResendPending ? (
+                            <><Spinner /> Sending…</>
+                          ) : cooldown > 0 ? (
+                            `Resend again in ${cooldown}s`
+                          ) : (
+                            'Resend confirmation email'
+                          )}
+                        </button>
+                      </form>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+
             <Link
               href="/login"
-              className="mt-5 inline-block text-xs font-medium text-indigo-400 hover:text-indigo-300 transition-colors"
+              className="mt-4 inline-block text-xs font-medium text-indigo-400 hover:text-indigo-300 transition-colors"
             >
               ← Back to sign in
             </Link>
@@ -179,4 +261,3 @@ export function SignupForm() {
     </div>
   )
 }
-
