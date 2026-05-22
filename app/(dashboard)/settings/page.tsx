@@ -1,19 +1,22 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useActionState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   IconSettings, IconShieldAlert, IconUsers, IconActivity, IconZap,
-  IconCheck, IconCopy, IconLink, IconX, IconPlus, IconRefresh,
+  IconCheck, IconCopy, IconLink, IconX, IconPlus, IconRefresh, IconUser,
 } from '@/components/icons'
+import { updateProfile, changePassword } from '@/lib/actions/auth'
+import { Spinner } from '@/components/auth/auth-shared'
+import { createClient } from '@/lib/supabase/client'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type SaveState = 'idle' | 'saving' | 'saved'
-type SectionId = 'general' | 'fraud' | 'team' | 'webhooks' | 'ai'
+type SectionId = 'general' | 'fraud' | 'team' | 'webhooks' | 'ai' | 'account'
 
 // ─── Static data ─────────────────────────────────────────────────────────────
 
@@ -23,6 +26,7 @@ const SECTIONS: { id: SectionId; title: string; icon: React.ReactNode; bg: strin
   { id: 'team',     title: 'Team & Permissions',  icon: <IconUsers className="w-4 h-4" />,        bg: 'bg-indigo-500/10', color: 'text-indigo-400' },
   { id: 'webhooks', title: 'Webhooks & API',      icon: <IconActivity className="w-4 h-4" />,     bg: 'bg-violet-500/10', color: 'text-violet-400' },
   { id: 'ai',       title: 'AI Model Config',     icon: <IconZap className="w-4 h-4" />,          bg: 'bg-amber-500/10',  color: 'text-amber-400'  },
+  { id: 'account',  title: 'My Account',          icon: <IconUser className="w-4 h-4" />,         bg: 'bg-emerald-500/10',color: 'text-emerald-400'},
 ]
 
 const PERMISSION_MATRIX = [
@@ -654,6 +658,150 @@ function AiSection() {
   )
 }
 
+// ─── Section: My Account ─────────────────────────────────────────────────────
+
+function AccountSection() {
+  const [profileState, profileAction, isProfilePending] = useActionState(updateProfile, null)
+  const [passwordState, passwordAction, isPasswordPending] = useActionState(changePassword, null)
+
+  const [displayName, setDisplayName] = useState('')
+  const [email, setEmail] = useState('')
+  const [profileLoaded, setProfileLoaded] = useState(false)
+
+  useEffect(() => {
+    const supabase = createClient()
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!user) {
+        setProfileLoaded(true)
+        return
+      }
+      supabase
+        .from('profiles')
+        .select('id, full_name, email, avatar_url')
+        .eq('id', user.id)
+        .maybeSingle()
+        .then(({ data }) => {
+          const p = data as { id: string; full_name: string | null; email: string; avatar_url: string | null } | null
+          setDisplayName(p?.full_name ?? '')
+          setEmail(p?.email ?? user.email ?? '')
+          setProfileLoaded(true)
+        })
+    })
+  }, [])
+
+  const profileError   = profileState && 'error'   in profileState ? profileState.error   : null
+  const profileSuccess = profileState && 'success' in profileState ? profileState.success : null
+  const passwordError   = passwordState && 'error'   in passwordState ? passwordState.error   : null
+  const passwordSuccess = passwordState && 'success' in passwordState ? passwordState.success : null
+
+  return (
+    <div className="space-y-4">
+      <Card padding="md">
+        <h3 className="text-sm font-semibold text-slate-100 mb-1">Profile</h3>
+        <p className="text-xs text-slate-500 mb-4">Update your display name shown across the platform.</p>
+
+        {profileError && (
+          <div className="mb-3 rounded-lg border border-red-500/20 bg-red-500/8 px-3 py-2.5">
+            <p className="text-xs text-red-400">{profileError}</p>
+          </div>
+        )}
+        {profileSuccess && (
+          <div className="mb-3 rounded-lg border border-emerald-500/20 bg-emerald-500/8 px-3 py-2.5">
+            <p className="text-xs text-emerald-400">{profileSuccess}</p>
+          </div>
+        )}
+
+        <form action={profileAction} className="space-y-3">
+          <div>
+            <label className="text-xs font-medium text-slate-400 block mb-1.5">Display name</label>
+            <input
+              name="displayName"
+              type="text"
+              required
+              disabled={isProfilePending || !profileLoaded}
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              placeholder="Your name"
+              className={INPUT_CLS}
+            />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-slate-400 block mb-1.5">Email address</label>
+            <input
+              type="email"
+              value={email}
+              disabled
+              readOnly
+              className={`${INPUT_CLS} opacity-50 cursor-not-allowed`}
+            />
+            <p className="mt-1 text-[11px] text-slate-500">Email changes require contacting support.</p>
+          </div>
+          <div className="flex justify-end pt-1">
+            <Button variant="primary" size="sm" type="submit" disabled={isProfilePending || !profileLoaded}>
+              {isProfilePending && <Spinner />}
+              {isProfilePending ? 'Saving…' : 'Save profile'}
+            </Button>
+          </div>
+        </form>
+      </Card>
+
+      <Card padding="md">
+        <h3 className="text-sm font-semibold text-slate-100 mb-1">Change password</h3>
+        <p className="text-xs text-slate-500 mb-4">Choose a new password for your account.</p>
+
+        {passwordError && (
+          <div className="mb-3 rounded-lg border border-red-500/20 bg-red-500/8 px-3 py-2.5">
+            <p className="text-xs text-red-400">{passwordError}</p>
+          </div>
+        )}
+        {passwordSuccess && (
+          <div className="mb-3 rounded-lg border border-emerald-500/20 bg-emerald-500/8 px-3 py-2.5">
+            <p className="text-xs text-emerald-400">{passwordSuccess}</p>
+          </div>
+        )}
+
+        <form action={passwordAction} className="space-y-3">
+          <div>
+            <label className="text-xs font-medium text-slate-400 block mb-1.5">
+              New password
+              <span className="ml-1 text-slate-600 font-normal">(min. 8 characters)</span>
+            </label>
+            <input
+              name="newPassword"
+              type="password"
+              autoComplete="new-password"
+              required
+              minLength={8}
+              disabled={isPasswordPending}
+              placeholder="••••••••"
+              className={INPUT_CLS}
+            />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-slate-400 block mb-1.5">Confirm new password</label>
+            <input
+              name="confirmPassword"
+              type="password"
+              autoComplete="new-password"
+              required
+              minLength={8}
+              disabled={isPasswordPending}
+              placeholder="••••••••"
+              className={INPUT_CLS}
+            />
+          </div>
+          <div className="flex justify-end pt-1">
+            <Button variant="primary" size="sm" type="submit" disabled={isPasswordPending}>
+              {isPasswordPending && <Spinner />}
+              {isPasswordPending ? 'Updating…' : 'Change password'}
+            </Button>
+          </div>
+        </form>
+      </Card>
+    </div>
+  )
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 function renderSection(id: SectionId) {
@@ -663,6 +811,7 @@ function renderSection(id: SectionId) {
     case 'team':     return <TeamSection />
     case 'webhooks': return <WebhooksSection />
     case 'ai':       return <AiSection />
+    case 'account':  return <AccountSection />
   }
 }
 

@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { useTransition } from 'react'
 import {
   IconLayoutGrid,
   IconFileSearch,
@@ -12,7 +13,10 @@ import {
   IconZap,
   IconX,
   IconChevronRight,
+  IconLogOut,
 } from '@/components/icons'
+import { signOut } from '@/lib/actions/auth'
+import type { UserProfile } from './dashboard-layout'
 
 const navItems = [
   { label: 'Dashboard', href: '/', icon: IconLayoutGrid },
@@ -30,10 +34,16 @@ const bottomItems = [
 interface SidebarProps {
   isOpen: boolean
   onClose: () => void
+  profile: UserProfile | null
 }
 
-export function Sidebar({ isOpen, onClose }: SidebarProps) {
+export function Sidebar({ isOpen, onClose, profile }: SidebarProps) {
   const pathname = usePathname()
+  const [isSigningOut, startSignOut] = useTransition()
+
+  function handleSignOut() {
+    startSignOut(async () => { await signOut() })
+  }
 
   const isActive = (href: string) => {
     if (href === '/') return pathname === '/'
@@ -151,17 +161,28 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
         </nav>
 
         {/* User profile */}
-        <div className="border-t border-slate-800/60 p-3">
+        <div className="border-t border-slate-800/60 p-3 space-y-1">
           <div className="flex items-center gap-2.5 rounded-md px-2 py-2 hover:bg-slate-800/70 transition-colors cursor-pointer group">
             <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 text-[11px] font-semibold text-white">
-              PC
+              {(profile?.full_name ?? profile?.email ?? '?').slice(0, 2).toUpperCase()}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-xs font-medium text-slate-200 truncate">Prem Chandar</p>
-              <p className="text-[10px] text-slate-500 truncate">Admin</p>
+              <p className="text-xs font-medium text-slate-200 truncate">
+                {profile?.full_name ?? profile?.email ?? 'Account'}
+              </p>
+              <p className="text-[10px] text-slate-500 truncate">Member</p>
             </div>
             <IconChevronRight className="w-3.5 h-3.5 text-slate-600 group-hover:text-slate-400 transition-colors shrink-0" />
           </div>
+          <button
+            type="button"
+            onClick={handleSignOut}
+            disabled={isSigningOut}
+            className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-xs font-medium text-slate-500 hover:text-red-400 hover:bg-red-500/8 transition-colors disabled:opacity-50"
+          >
+            <IconLogOut className="w-3.5 h-3.5 shrink-0" />
+            {isSigningOut ? 'Signing out…' : 'Sign out'}
+          </button>
         </div>
       </aside>
     </>

@@ -47,3 +47,24 @@ export async function getCurrentOrgId(
 
   return (data as { organization_id: string | null } | null)?.organization_id ?? null
 }
+
+export async function getCurrentProfile() {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return null
+
+  const { data } = await supabase
+    .from('profiles')
+    .select('id, full_name, email, avatar_url')
+    .eq('id', user.id)
+    .maybeSingle()
+
+  if (!data) return { id: user.id, full_name: null, email: user.email ?? '', avatar_url: null }
+
+  return data as {
+    id: string
+    full_name: string | null
+    email: string
+    avatar_url: string | null
+  }
+}

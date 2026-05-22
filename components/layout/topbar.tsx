@@ -2,13 +2,17 @@
 
 import { useState } from 'react'
 import { IconSearch, IconBell, IconMenu, IconPlus, IconRefresh } from '@/components/icons'
+import type { UserProfile } from './dashboard-layout'
 
 interface TopbarProps {
   onMenuClick: () => void
+  profile: UserProfile | null
 }
 
-export function Topbar({ onMenuClick }: TopbarProps) {
+export function Topbar({ onMenuClick, profile }: TopbarProps) {
   const [searchFocused, setSearchFocused] = useState(false)
+
+  const avatarInitials = (profile?.full_name ?? profile?.email ?? '?').slice(0, 2).toUpperCase()
 
   return (
     <header className="flex h-14 items-center gap-3 border-b border-slate-800/60 bg-slate-950/80 px-4 backdrop-blur-sm shrink-0">
@@ -73,7 +77,7 @@ export function Topbar({ onMenuClick }: TopbarProps) {
           className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 text-[11px] font-semibold text-white hover:ring-2 hover:ring-indigo-400/40 transition-all"
           aria-label="User menu"
         >
-          PC
+          {avatarInitials}
         </button>
       </div>
     </header>

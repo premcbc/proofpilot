@@ -29,48 +29,39 @@ export interface Database {
       profiles: {
         Row: {
           id: string
-          organization_id: string | null
           email: string
-          display_name: string | null
-          role: string
+          full_name: string | null
           avatar_url: string | null
-          initials: string | null
-          color: string | null
-          reviews_count: number
-          approvals_count: number
-          joined_at: string
-          status: string
+          timezone: string | null
+          locale: string | null
+          last_seen_at: string | null
+          metadata: Json | null
           created_at: string
+          updated_at: string
         }
         Insert: {
           id: string
-          organization_id?: string | null
           email: string
-          display_name?: string | null
-          role?: string
+          full_name?: string | null
           avatar_url?: string | null
-          initials?: string | null
-          color?: string | null
-          reviews_count?: number
-          approvals_count?: number
-          joined_at?: string
-          status?: string
+          timezone?: string | null
+          locale?: string | null
+          last_seen_at?: string | null
+          metadata?: Json | null
           created_at?: string
+          updated_at?: string
         }
         Update: {
           id?: string
-          organization_id?: string | null
           email?: string
-          display_name?: string | null
-          role?: string
+          full_name?: string | null
           avatar_url?: string | null
-          initials?: string | null
-          color?: string | null
-          reviews_count?: number
-          approvals_count?: number
-          joined_at?: string
-          status?: string
+          timezone?: string | null
+          locale?: string | null
+          last_seen_at?: string | null
+          metadata?: Json | null
           created_at?: string
+          updated_at?: string
         }
       }
       reviews: {

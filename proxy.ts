@@ -29,10 +29,16 @@ export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl
 
   // Allow auth routes and public assets through
-  const isAuthRoute = pathname.startsWith('/login') || pathname.startsWith('/auth')
+  const isAuthRoute =
+    pathname.startsWith('/login') ||
+    pathname.startsWith('/signup') ||
+    pathname.startsWith('/auth') ||
+    pathname.startsWith('/forgot-password')
+  // reset-password needs a recovery session (user is authenticated), so allow all
+  const isUniversalRoute = pathname.startsWith('/reset-password')
   const isPublicAsset = pathname.startsWith('/_next') || pathname.startsWith('/favicon')
 
-  if (isPublicAsset) return supabaseResponse
+  if (isPublicAsset || isUniversalRoute) return supabaseResponse
 
   // Unauthenticated users can only access /login
   if (!user && !isAuthRoute) {

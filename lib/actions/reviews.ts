@@ -31,12 +31,12 @@ export async function submitReviewDecision(
 
   const { data: profileRow } = await supabase
     .from('profiles')
-    .select('display_name, email, initials, color')
+    .select('full_name, email')
     .eq('id', user.id)
     .single()
-  const profile = profileRow as { display_name: string | null; email: string; initials: string | null; color: string | null } | null
+  const profile = profileRow as { full_name: string | null; email: string } | null
 
-  const actor = profile?.display_name ?? profile?.email ?? user.email ?? 'Unknown'
+  const actor = profile?.full_name ?? profile?.email ?? user.email ?? 'Unknown'
 
   const { error: updateError } = await supabase
     .from('reviews')
@@ -62,8 +62,8 @@ export async function submitReviewDecision(
     action: decision,
     actor,
     actor_type: 'human',
-    initials: profile?.initials ?? actor.slice(0, 2).toUpperCase(),
-    color: profile?.color ?? 'from-slate-500 to-slate-600',
+    initials: actor.slice(0, 2).toUpperCase(),
+    color: 'from-slate-500 to-slate-600',
     detail: note ?? null,
   })
 

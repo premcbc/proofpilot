@@ -20,7 +20,10 @@
       "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(d.get\\('version','?'\\)\\); print\\(list\\(d.get\\('exports',{}\\).keys\\(\\)\\)[:10]\\)\")",
       "Bash(cd c:/Users/ADMIN/Downloads/proofpilot && rm -f app/page.tsx app/reviews/page.tsx \"app/reviews/[id]/page.tsx\" app/reviews/loading.tsx \"app/reviews/[id]/loading.tsx\" app/analytics/page.tsx app/analytics/loading.tsx app/fraud/page.tsx app/fraud/loading.tsx app/team/page.tsx app/team/loading.tsx app/settings/page.tsx app/settings/loading.tsx app/demo/page.tsx app/demo/loading.tsx && echo \"Deleted old pages\")",
       "Bash(Remove-Item -Recurse -Force .next -ErrorAction SilentlyContinue)",
-      "Bash(Write-Host \"Done\")"
+      "Bash(Write-Host \"Done\")",
+      "Bash(Get-ChildItem \"C:\\\\Users\\\\ADMIN\\\\Downloads\\\\proofpilot\\\\components\" -Recurse -Name)",
+      "Bash(Get-ChildItem \"C:\\\\Users\\\\ADMIN\\\\Downloads\\\\proofpilot\\\\lib\" -Recurse -Name)",
+      "Bash(npm run *)"
     ],
     "additionalDirectories": [
       "c:\\Users\\ADMIN\\Downloads\\proofpilot\\app\\reviews",
