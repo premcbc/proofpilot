@@ -9,6 +9,8 @@ export interface UserProfile {
   full_name: string | null
   email: string
   avatar_url: string | null
+  role?: string | null
+  org_name?: string | null
 }
 
 interface Props {

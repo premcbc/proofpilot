@@ -3,6 +3,7 @@
 import { useActionState, useEffect, useRef, useState, useTransition } from 'react'
 import Link from 'next/link'
 import { signInWithPassword, signInWithGoogle, resendConfirmationEmail } from '@/lib/actions/auth'
+import type { AuthState } from '@/lib/actions/auth'
 import { IconShieldAlert } from '@/components/icons'
 import { Spinner, GoogleIcon } from '@/components/auth/auth-shared'
 
@@ -11,25 +12,29 @@ interface Props {
 }
 
 export function LoginForm({ redirectTo }: Props) {
-  const [state, action, isPending] = useActionState(signInWithPassword, null)
-  const [resendState, resendAction, isResendPending] = useActionState(resendConfirmationEmail, null)
+  const [state, action, isPending] = useActionState<AuthState, FormData>(signInWithPassword, null)
+  const [resendState, resendAction, isResendPending] = useActionState<AuthState, FormData>(resendConfirmationEmail, null)
   const [isGooglePending, startGoogleTransition] = useTransition()
   const [cooldown, setCooldown] = useState(0)
   const prevResendPendingRef = useRef(false)
 
-  const error = state && 'error' in state ? state.error : null
+  const error = state && 'error' in state ? (state as { error: string }).error : null
   const isUnconfirmed = !!(state && 'unconfirmed' in state)
   const unconfirmedEmail = isUnconfirmed
     ? (state as { unconfirmed: string; email: string }).email
     : null
   const anyPending = isPending || isGooglePending
 
-  const resendError = resendState && 'error' in resendState ? resendState.error : null
-  const resendRateLimited =
-    resendState && 'rateLimited' in resendState
-      ? (resendState as { rateLimited: string }).rateLimited
-      : null
-  const resendSuccess = resendState && 'success' in resendState
+  const resendError       = resendState && 'error' in resendState ? (resendState as { error: string }).error : null
+  const resendRateLimited = resendState && 'rateLimited' in resendState ? (resendState as { rateLimited: string }).rateLimited : null
+  const resendSuccessMsg  = resendState && 'success' in resendState ? (resendState as { success: string }).success : null
+
+  // Dev-only: log auth state changes to browser console
+  useEffect(() => {
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[login-form] state:', JSON.stringify(state))
+    }
+  }, [state])
 
   // Start 60s cooldown when a resend action completes
   useEffect(() => {
@@ -84,8 +89,8 @@ export function LoginForm({ redirectTo }: Props) {
             </p>
 
             <div className="mt-5 border-t border-slate-800 pt-4">
-              {resendSuccess ? (
-                <p className="text-xs text-emerald-400">Confirmation email resent. Check your inbox.</p>
+              {resendSuccessMsg ? (
+                <p className="text-xs text-emerald-400">{resendSuccessMsg}</p>
               ) : (
                 <>
                   {(resendError || resendRateLimited) && (
@@ -118,13 +123,12 @@ export function LoginForm({ redirectTo }: Props) {
               )}
             </div>
 
-            <button
-              type="button"
-              onClick={() => window.location.reload()}
+            <Link
+              href="/login"
               className="mt-4 inline-block text-xs font-medium text-indigo-400 hover:text-indigo-300 transition-colors"
             >
               ← Use a different account
-            </button>
+            </Link>
           </div>
         ) : (
           <>
@@ -229,6 +233,16 @@ export function LoginForm({ redirectTo }: Props) {
       <p className="mt-6 text-center text-[11px] text-slate-600">
         Enterprise access only · Contact your administrator
       </p>
+
+      {/* Dev-only debug panel */}
+      {process.env.NODE_ENV === 'development' && state !== null && (
+        <details className="mt-4 rounded border border-slate-700 bg-slate-900/80 p-2 text-[10px] text-slate-500">
+          <summary className="cursor-pointer font-mono">auth state (dev)</summary>
+          <pre className="mt-1 overflow-auto whitespace-pre-wrap break-all font-mono">
+            {JSON.stringify(state, null, 2)}
+          </pre>
+        </details>
+      )}
     </div>
   )
 }

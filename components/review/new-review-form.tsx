@@ -6,7 +6,14 @@ import Link from 'next/link'
 import { createReviewWithFile, type UploadState } from '@/lib/actions/reviews-upload'
 import { IconChevronLeft, IconUpload, IconX } from '@/components/icons'
 
-const REVIEW_TYPES = ['Screenshot', 'Document', 'Video', 'Audio', 'Other']
+// Values must match the review_type DB enum exactly: screenshot, document, video, mixed
+const REVIEW_TYPES = ['screenshot', 'document', 'video', 'mixed'] as const
+const REVIEW_TYPE_LABELS: Record<string, string> = {
+  screenshot: 'Screenshot',
+  document:   'Document',
+  video:      'Video',
+  mixed:      'Mixed',
+}
 const ACCEPT = '.png,.jpg,.jpeg,.webp,.pdf'
 
 function formatBytes(bytes: number): string {
@@ -149,7 +156,7 @@ export function NewReviewForm() {
               >
                 <option value="">Auto-detect</option>
                 {REVIEW_TYPES.map((t) => (
-                  <option key={t} value={t}>{t}</option>
+                  <option key={t} value={t}>{REVIEW_TYPE_LABELS[t]}</option>
                 ))}
               </select>
             </div>

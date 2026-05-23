@@ -4,7 +4,9 @@ import type { Database } from './types'
 
 // ─── Role / status types ──────────────────────────────────────────────────────
 
-export type MemberRole = 'owner' | 'admin' | 'reviewer' | 'analyst' | 'viewer'
+// Matches the DB member_role enum exactly: no 'owner' role exists in the database.
+// 'admin' is the highest role.
+export type MemberRole = 'admin' | 'manager' | 'reviewer' | 'analyst' | 'viewer'
 export type MemberStatus = 'invited' | 'active' | 'inactive' | 'suspended'
 
 export interface OrgMembership {
@@ -14,6 +16,12 @@ export interface OrgMembership {
   role: MemberRole
   status: MemberStatus
   accepted_at: string | null
+  // Populated when fetched via the get_my_active_membership SECURITY DEFINER RPC
+  // (direct PostgREST queries may be blocked by RLS on organizations table)
+  org_name?: string | null
+  org_slug?: string | null
+  org_plan?: string | null
+  org_billing_email?: string | null
 }
 
 export interface OrgContext {
@@ -24,11 +32,11 @@ export interface OrgContext {
 // ─── Permission matrix ────────────────────────────────────────────────────────
 
 const PERMISSIONS = {
-  canManageOrg:      ['owner'] as MemberRole[],
-  canManageUsers:    ['owner', 'admin'] as MemberRole[],
-  canReview:         ['owner', 'admin', 'reviewer'] as MemberRole[],
-  canViewAnalytics:  ['owner', 'admin', 'analyst'] as MemberRole[],
-  canView:           ['owner', 'admin', 'reviewer', 'analyst', 'viewer'] as MemberRole[],
+  canManageOrg:      ['admin'] as MemberRole[],
+  canManageUsers:    ['admin', 'manager'] as MemberRole[],
+  canReview:         ['admin', 'manager', 'reviewer'] as MemberRole[],
+  canViewAnalytics:  ['admin', 'manager', 'analyst'] as MemberRole[],
+  canView:           ['admin', 'manager', 'reviewer', 'analyst', 'viewer'] as MemberRole[],
 } as const
 
 type PermissionKey = keyof typeof PERMISSIONS
@@ -49,55 +57,58 @@ export const canView          = (role: MemberRole) => hasPermission(role, 'canVi
 type AnySupabase = SupabaseClient<Database> | any
 
 /**
- * Returns the caller's active membership, with self-heal for users whose
- * organization_members row was never created (pre-fix signups).
+ * Returns the caller's active org membership.
+ *
+ * Two-step strategy:
+ * 1. Direct PostgREST query — fast, works when the RLS SELECT policy includes
+ *    `auth.uid() = user_id`.
+ * 2. SECURITY DEFINER RPC fallback — used when the policy only contains
+ *    `is_org_member(organization_id)` which is circular for brand-new rows.
+ *    The RPC also self-heals missing membership rows for org creators.
  */
 export async function getCurrentMembership(
   supabase: AnySupabase
 ): Promise<OrgMembership | null> {
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return null
+  if (!user) {
+    console.log('[getCurrentMembership] no authenticated user')
+    return null
+  }
 
-  // Fast path: active membership exists
-  const { data: membership } = await supabase
+  console.log('[getCurrentMembership] querying for user_id:', user.id)
+
+  // 1. Direct query ─────────────────────────────────────────────────────────
+  const { data: row, error: rowError } = await supabase
     .from('organization_members')
     .select('id, organization_id, user_id, role, status, accepted_at')
     .eq('user_id', user.id)
     .eq('status', 'active')
-    .order('accepted_at', { ascending: true, nullsFirst: false })
     .limit(1)
     .maybeSingle()
 
-  if (membership) return membership as OrgMembership
+  console.log(
+    '[getCurrentMembership] direct query →',
+    row ? `org=${row.organization_id} role=${row.role}` : 'null',
+    rowError ? `| error: ${rowError.message}` : ''
+  )
 
-  // Self-heal: user created an org before membership bootstrap was fixed —
-  // organisations.created_by is the authoritative owner reference.
-  const { data: ownedOrg } = await supabase
-    .from('organizations')
-    .select('id')
-    .eq('created_by', user.id)
-    .limit(1)
-    .maybeSingle()
+  if (row) return row as OrgMembership
 
-  if (!ownedOrg) return null
+  // 2. SECURITY DEFINER RPC — bypasses RLS circular dependency ──────────────
+  // Needed when the SELECT policy on organization_members uses is_org_member()
+  // which itself queries organization_members (new rows fail their own policy).
+  const { data: rpcRow, error: rpcError } = await supabase
+    .rpc('get_my_active_membership')
 
-  const joined = new Date().toISOString()
-  const { data: healed } = await supabase
-    .from('organization_members')
-    .upsert(
-      {
-        organization_id: ownedOrg.id,
-        user_id: user.id,
-        role: 'owner',
-        status: 'active',
-        accepted_at: joined,
-      },
-      { onConflict: 'organization_id,user_id', ignoreDuplicates: false }
-    )
-    .select('id, organization_id, user_id, role, status, accepted_at')
-    .single()
+  console.log(
+    '[getCurrentMembership] RPC fallback →',
+    rpcRow ? `org=${(rpcRow as OrgMembership).organization_id} role=${(rpcRow as OrgMembership).role}` : 'null',
+    rpcError ? `| error: ${rpcError.message}` : ''
+  )
 
-  return healed ? (healed as OrgMembership) : null
+  if (rpcRow) return rpcRow as OrgMembership
+
+  return null
 }
 
 export async function getCurrentOrgId(supabase: AnySupabase): Promise<string | null> {
@@ -112,6 +123,41 @@ export async function getCurrentOrgId(supabase: AnySupabase): Promise<string | n
 export async function requireOrg(supabase: AnySupabase): Promise<OrgContext> {
   const membership = await getCurrentMembership(supabase)
   if (!membership) redirect('/onboarding')
+  return { orgId: membership.organization_id, membership }
+}
+
+/**
+ * Canonical bootstrap helper. Ensures the authenticated user has a profile
+ * row, attaches any pending email invitations, and resolves their active
+ * membership — all in one place.
+ *
+ * Returns { orgId, membership } if the user is set up, or null if they have
+ * no org yet (caller should redirect to /onboarding).
+ *
+ * Use this in server actions and route handlers instead of calling
+ * getCurrentMembership directly, so that profile upsert and invitation
+ * attachment always happen on first access.
+ */
+export async function ensureUserWorkspace(supabase: AnySupabase): Promise<OrgContext | null> {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return null
+
+  // Ensure profile row exists (idempotent — won't overwrite full_name if set)
+  await supabase
+    .from('profiles')
+    .upsert(
+      { id: user.id, email: user.email ?? '' },
+      { onConflict: 'id', ignoreDuplicates: true }
+    )
+
+  // Attach any pending invitations before resolving membership
+  if (user.email) {
+    await attachInvitedMemberships(supabase, user.id, user.email)
+  }
+
+  const membership = await getCurrentMembership(supabase)
+  if (!membership) return null
+
   return { orgId: membership.organization_id, membership }
 }
 

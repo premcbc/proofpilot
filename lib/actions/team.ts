@@ -6,8 +6,8 @@ import { getCurrentMembership, canManageUsers, canManageOrg, type MemberRole } f
 
 export type TeamActionState = { error: string } | { success: string } | null
 
-const VALID_ROLES: MemberRole[] = ['admin', 'reviewer', 'analyst', 'viewer']
-const MANAGEABLE_ROLES: MemberRole[] = ['admin', 'reviewer', 'analyst', 'viewer']
+const VALID_ROLES: MemberRole[] = ['admin', 'manager', 'reviewer', 'analyst', 'viewer']
+const MANAGEABLE_ROLES: MemberRole[] = ['admin', 'manager', 'reviewer', 'analyst', 'viewer']
 
 // ─── Invite member ────────────────────────────────────────────────────────────
 
@@ -30,9 +30,9 @@ export async function inviteTeamMember(
     return { error: 'You do not have permission to invite team members.' }
   }
 
-  // Owners can invite any role; admins cannot invite other admins
+  // Only admins (highest role) can invite other admins
   if (role === 'admin' && !canManageOrg(membership.role)) {
-    return { error: 'Only owners can invite admins.' }
+    return { error: 'Only admins can invite other admins.' }
   }
 
   // Check if already a member
@@ -57,6 +57,8 @@ export async function inviteTeamMember(
       invited_email: email,
       role,
       status: 'invited',
+      invited_at: new Date().toISOString(),
+      invited_by: membership.user_id,
     })
 
   if (insertError) return { error: insertError.message }
@@ -91,7 +93,6 @@ export async function updateMemberRole(
     .maybeSingle()
 
   if (!target) return { error: 'Member not found.' }
-  if (target.role === 'owner') return { error: 'The owner role cannot be changed.' }
   if (newRole === 'admin' && !canManageOrg(membership.role)) {
     return { error: 'Only owners can assign the admin role.' }
   }
@@ -128,7 +129,6 @@ export async function suspendMember(memberId: string): Promise<TeamActionState> 
     .maybeSingle()
 
   if (!target) return { error: 'Member not found.' }
-  if (target.role === 'owner') return { error: 'The owner cannot be suspended.' }
   if (target.user_id === membership.user_id) return { error: 'You cannot suspend yourself.' }
 
   const { error } = await supabase
@@ -192,7 +192,6 @@ export async function removeMember(memberId: string): Promise<TeamActionState> {
     .maybeSingle()
 
   if (!target) return { error: 'Member not found.' }
-  if (target.role === 'owner') return { error: 'The owner cannot be removed.' }
   if (target.user_id === membership.user_id) return { error: 'You cannot remove yourself.' }
 
   const { error } = await supabase

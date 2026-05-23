@@ -2,13 +2,22 @@
 
 import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
+import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
+import { getCurrentMembership } from '@/lib/supabase/org'
 
 export type AuthState =
   | { error: string }
   | { success: string; email?: string }
   | { rateLimited: string; email: string }
   | { unconfirmed: string; email: string }
+  /**
+   * Returned when Supabase gives { user: null, error: null } — this happens under
+   * "Prevent email enumeration attacks" for both new signups AND already-registered
+   * unconfirmed emails. We cannot distinguish the two from the client side.
+   * Show the email screen with a resend option; never show a hard failure.
+   */
+  | { ghost: string; email: string }
   | null
 
 function isRateLimitError(message: string): boolean {
@@ -84,45 +93,84 @@ export async function signUpWithPassword(
     return { error: 'Password must be at least 8 characters.' }
   }
 
+  // Slug stored in metadata so the callback can bootstrap without a round-trip.
+  const orgSlug = orgName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+
+  console.log('[signup] submitted — email:', email, '| org:', orgName, '| orgSlug:', orgSlug)
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const supabase = (await createClient()) as any
 
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
-    // Store org_name in metadata so the auth callback can bootstrap without
-    // requiring another round-trip through /onboarding.
-    options: { data: { full_name: fullName, org_name: orgName } },
+    options: {
+      data: { full_name: fullName, org_name: orgName, org_slug: orgSlug },
+    },
   })
 
+  // Structured log of the complete Supabase response.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const errAny = error as any
+  console.log('[signup] supabase response:', JSON.stringify({
+    user_id:         data?.user?.id          ?? null,
+    user_email:      data?.user?.email       ?? null,
+    user_identities: data?.user?.identities  ?? null,
+    session:         data?.session           ? 'present' : null,
+    error:           error ? {
+      message: error.message,
+      code:    errAny?.code   ?? null,
+      status:  errAny?.status ?? null,
+    } : null,
+  }))
+
+  // ── Branch A: Supabase returned an explicit error ─────────────────────────
   if (error) {
     if (isRateLimitError(error.message)) {
+      console.log('[signup] → rateLimited')
       return {
         rateLimited: 'Your account may already be created. Please wait a few minutes, then use "Resend confirmation email" or try signing in.',
         email,
       }
     }
-    return { error: mapAuthError(error.message) }
+    const mapped = mapAuthError(error.message)
+    console.log('[signup] → error:', mapped)
+    return { error: mapped }
   }
 
-  // No session = email confirmation is required.
-  // Supabase may also return data.user = null in this case (enumeration protection),
-  // so we check for the session FIRST — the absence of a session is the canonical
-  // signal that the user must verify their email before proceeding.
-  if (!data.session) {
+  // ── Branch B: User created + immediate session (email confirmation disabled)
+  // Both user.id and session present → bootstrap workspace and redirect now.
+  if (data.user?.id && data.session) {
+    console.log('[signup] → immediate session, bootstrapping for user:', data.user.id)
+    const result = await bootstrapOrg(data.user.id, email, fullName, orgName)
+    if ('error' in result) {
+      console.error('[signup] bootstrap failed:', result.error)
+      return { error: `Account created but workspace setup failed: ${result.error}` }
+    }
+    console.log('[signup] → workspace ready, org_id:', result.orgId)
+    redirect('/')
+  }
+
+  // ── Branch C: User created + no session (email confirmation required) ──────
+  // session === null is normal and expected — do NOT treat it as failure.
+  // Confirmation arrives via /auth/callback after the user clicks the email link.
+  if (data.user?.id) {
+    console.log('[signup] → confirmation required, user:', data.user.id, '| email:', data.user.email)
     return { success: 'Check your email to confirm your account, then sign in.', email }
   }
 
-  // Immediate sign-in (email confirmation disabled) — bootstrap everything now.
-  const user = data.user
-  if (!user) return { error: 'Failed to create account. Please try again.' }
-
-  const result = await bootstrapOrg(user.id, email, fullName, orgName)
-  if ('error' in result) {
-    return { error: `Account created but failed to set up organization: ${result.error}` }
+  // ── Branch D: null user + null error (Supabase enumeration protection) ─────
+  // Supabase returns { user: null, session: null, error: null } in two situations:
+  //   1. "Prevent email enumeration attacks" is ON — new user WAS created and email WAS sent,
+  //      but Supabase hides the user object to prevent email discovery.
+  //   2. The email is already registered (unconfirmed) — Supabase resent the email.
+  // We CANNOT distinguish these cases from the server action. Either way an email may
+  // have been sent, so we surface the email screen with a resend option — never a hard failure.
+  console.log('[signup] → ghost response (null user + null error) for:', email)
+  return {
+    ghost: 'We could not confirm your account status. A confirmation email may have been sent — check your inbox and spam folder. If this email is already registered, try signing in or use resend below.',
+    email,
   }
-
-  redirect('/')
 }
 
 // ── google oauth ──────────────────────────────────────────────────────────────
@@ -148,16 +196,32 @@ export async function resendConfirmationEmail(
   const email = (formData.get('email') as string)?.trim()
   if (!email) return { error: 'Email is required.' }
 
+  console.log('[resend] requesting resend for:', email)
+
   const supabase = await createClient()
   const { error } = await supabase.auth.resend({ type: 'signup', email })
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const errAny = error as any
+  console.log('[resend] response:', error ? {
+    message: error.message,
+    code:    errAny?.code   ?? null,
+    status:  errAny?.status ?? null,
+  } : 'accepted (no error)')
+
   if (error) {
     if (isRateLimitError(error.message)) {
-      return { rateLimited: 'Too many confirmation emails requested. Please wait a few minutes before trying again.', email }
+      console.log('[resend] → rate limited')
+      return { rateLimited: 'Too many requests. Please wait a few minutes before trying again.', email }
     }
+    console.log('[resend] → error:', error.message)
     return { error: mapAuthError(error.message) }
   }
-  return { success: 'Confirmation email resent. Check your inbox.', email }
+
+  // Supabase resend() returns no error even when the email doesn't exist or is already confirmed.
+  // "accepted" means the request was received — delivery is not guaranteed.
+  console.log('[resend] → accepted')
+  return { success: 'Resend request submitted. Check your inbox and spam folder.', email }
 }
 
 // ── sign-out ──────────────────────────────────────────────────────────────────
@@ -174,35 +238,26 @@ export async function bootstrapOrg(userId: string, email: string, displayName: s
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const supabase = (await createClient()) as any
 
-  const slug = email.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '-')
+  const slug = (email.split('@')[0] ?? 'org').toLowerCase().replace(/[^a-z0-9]/g, '-')
   const orgName = providedOrgName || displayName || email.split('@')[0]
 
-  // Profile must exist before org creation (organizations.created_by FK → profiles.id)
-  await supabase.from('profiles').upsert(
-    { id: userId, email, full_name: displayName || null },
-    { onConflict: 'id' }
-  )
+  console.log('[bootstrapOrg] user:', userId, '| org:', orgName)
 
-  const { data: orgId, error: orgError } = await supabase.rpc('create_organization', {
-    org_name: orgName,
-    org_slug: slug + '-' + Date.now().toString(36),
+  // Single RPC call — SECURITY DEFINER handles profile + org + membership atomically,
+  // bypassing the RLS bootstrap paradox (no org_members row → is_org_member() = false).
+  const { data: orgId, error: rpcError } = await supabase.rpc('bootstrap_user_workspace', {
+    p_org_name: orgName,
+    p_org_slug: `${slug}-${Date.now().toString(36)}`,
+    p_full_name: displayName || null,
   }) as { data: string | null; error: { message: string } | null }
 
-  if (orgError || !orgId) {
-    return { error: orgError?.message ?? 'Failed to create organization' }
+  if (rpcError || !orgId) {
+    console.error('[bootstrapOrg] RPC failed:', rpcError?.message ?? 'no orgId returned')
+    return { error: rpcError?.message ?? 'Failed to create organization' }
   }
 
-  const now = new Date().toISOString()
-
-  // Upsert so it's idempotent if the RPC already created a row
-  await supabase
-    .from('organization_members')
-    .upsert(
-      { organization_id: orgId, user_id: userId, role: 'owner', status: 'active', accepted_at: now },
-      { onConflict: 'organization_id,user_id', ignoreDuplicates: false }
-    )
-
-  return { orgId }
+  console.log('[bootstrapOrg] success, org_id:', orgId)
+  return { orgId: orgId as string }
 }
 
 export async function ensureProfile(userId: string, email: string) {
@@ -310,19 +365,84 @@ export async function changePassword(
 
 // ── onboarding ────────────────────────────────────────────────────────────────
 
+/**
+ * Dedicated state type for the onboarding form action.
+ * Explicit status field avoids ambiguity with the shared AuthState type.
+ */
+export type OnboardingState =
+  | { status: 'success'; orgId: string }
+  | { status: 'error'; error: string }
+  | null
+
 export async function createOrgForUser(
+  _prevState: OnboardingState,
+  formData: FormData
+): Promise<OnboardingState> {
+  const orgName = (formData.get('orgName') as string)?.trim()
+  if (!orgName) return { status: 'error', error: 'Organization name is required.' }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const supabase = (await createClient()) as any
+  const { data: { user } } = await supabase.auth.getUser()
+  console.log('[createOrgForUser] user:', user?.id ?? 'none', '| orgName:', orgName)
+  if (!user) return { status: 'error', error: 'Not authenticated.' }
+
+  const displayName = (user.user_metadata?.full_name as string | undefined)
+    ?? user.email?.split('@')[0]
+    ?? 'User'
+
+  const result = await bootstrapOrg(user.id, user.email ?? '', displayName, orgName)
+  if ('error' in result) {
+    console.error('[createOrgForUser] bootstrap failed:', result.error)
+    return { status: 'error', error: result.error ?? 'Failed to create organization' }
+  }
+
+  console.log('[createOrgForUser] workspace ready, org_id:', result.orgId)
+
+  // Verify the membership is immediately visible (RLS sanity check)
+  const verifyMembership = await getCurrentMembership(supabase)
+  console.log(
+    '[createOrgForUser] post-bootstrap membership:',
+    verifyMembership
+      ? `role=${verifyMembership.role} org=${verifyMembership.organization_id}`
+      : 'NOT FOUND — RLS may be blocking the read-back'
+  )
+
+  // Invalidate all dashboard layout caches so the next server render re-queries.
+  revalidatePath('/', 'layout')
+
+  // Return success — do NOT call redirect() here.
+  // useActionState absorbs redirect() responses without triggering browser navigation.
+  // The client component uses window.location.assign('/') for a hard navigation that
+  // bypasses the Next.js router cache entirely, ensuring fresh server-side membership check.
+  return { status: 'success', orgId: result.orgId }
+}
+
+// ── organization settings ─────────────────────────────────────────────────────
+
+export async function updateOrganization(
   _prevState: AuthState,
   formData: FormData
 ): Promise<AuthState> {
-  const orgName = (formData.get('orgName') as string)?.trim()
+  const orgName      = (formData.get('orgName') as string)?.trim()
+  const billingEmail = (formData.get('billingEmail') as string)?.trim() || null
+
   if (!orgName) return { error: 'Organization name is required.' }
 
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'Not authenticated.' }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const supabase = (await createClient()) as any
 
-  const result = await bootstrapOrg(user.id, user.email ?? '', user.user_metadata?.full_name ?? user.email?.split('@')[0] ?? 'User', orgName)
-  if ('error' in result) return { error: result.error ?? 'Failed to create organization' }
+  // Use SECURITY DEFINER RPC — direct .update() on organizations is blocked by the
+  // same is_org_member() circular RLS dependency that affects organization_members.
+  const { data, error } = await supabase.rpc('update_current_organization', {
+    p_name:          orgName,
+    p_billing_email: billingEmail,
+  })
 
-  redirect('/')
+  console.log('[updateOrganization] RPC result:', data ? 'ok' : 'null', 'error:', error?.message ?? 'none')
+
+  if (error) return { error: error.message }
+
+  revalidatePath('/settings')
+  return { success: 'Organization updated.' }
 }

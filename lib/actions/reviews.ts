@@ -42,9 +42,22 @@ export async function submitReviewDecision(
 
   const actor = profile?.full_name ?? profile?.email ?? user.email ?? 'Unknown'
 
+  const now = new Date().toISOString()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const updatePayload: Record<string, any> = {
+    status: decision,
+    decided_at: now,
+    decided_by: user.id,
+  }
+  if (decision === 'escalated') {
+    updatePayload.escalated = true
+    updatePayload.escalated_at = now
+    if (note) updatePayload.escalation_reason = note
+  }
+
   const { error: updateError } = await supabase
     .from('reviews')
-    .update({ status: decision })
+    .update(updatePayload)
     .eq('id', review.id)
 
   if (updateError) return { error: updateError.message }

@@ -105,30 +105,49 @@ export async function getActivityFeed(
   const { limit = 6 } = options
 
   try {
+    // audit_logs is the write target for submitReviewDecision; read from there.
+    // entity_id has no typed FK so we batch-resolve review codes separately.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data, error } = await (supabase as any)
-      .from('review_actions')
-      .select('id, action_type, note, created_at, review_id, reviews!review_id(review_code), profiles!actor_id(full_name, email)')
+    const { data: logs, error } = await (supabase as any)
+      .from('audit_logs')
+      .select('id, actor_label, action, after_state, entity_id, created_at')
       .eq('organization_id', orgId)
+      .eq('entity_type', 'review')
       .order('created_at', { ascending: false })
       .limit(limit)
 
-    if (error || !data) return []
+    if (error || !logs?.length) return []
+
+    // Batch-resolve review_code for each entity_id
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const reviewIds = [...new Set((logs as any[]).map((l: any) => l.entity_id).filter(Boolean))] as string[]
+    const reviewCodeMap: Record<string, string> = {}
+    if (reviewIds.length > 0) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: reviewRows } = await (supabase as any)
+        .from('reviews')
+        .select('id, review_code')
+        .in('id', reviewIds)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const r of (reviewRows ?? []) as any[]) {
+        if (r.id && r.review_code) reviewCodeMap[r.id] = r.review_code
+      }
+    }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (data as any[]).map((e) => {
-      const profile = e.profiles ?? null
-      const by: string = profile?.full_name ?? profile?.email ?? 'Unknown'
-      const reviewCode: string = e.reviews?.review_code ?? e.review_id ?? '—'
+    return (logs as any[]).map((e) => {
+      const by: string = e.actor_label ?? 'Unknown'
+      const reviewCode = (e.entity_id ? reviewCodeMap[e.entity_id] : null) ?? e.entity_id ?? '—'
+      const afterState = e.after_state as { note?: string } | null
       return {
         id: e.id,
-        action: e.action_type ?? '—',
+        action: e.action ?? '—',
         item: reviewCode,
         by,
         initials: by.slice(0, 2).toUpperCase(),
         color: 'from-slate-500 to-slate-600',
         time: timeAgo(e.created_at),
-        detail: e.note ?? '',
+        detail: afterState?.note ?? '',
         createdAt: e.created_at,
       }
     })

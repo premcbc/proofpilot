@@ -9,6 +9,30 @@ export interface ReviewOcrField {
   confidence: number
 }
 
+// ── OCR Extraction ─────────────────────────────────────────────────────────────
+// Represents one row from public.ocr_extractions (latest row per review).
+// The renderer is intentionally generic — structured_data keys vary by document
+// type (invoice, screenshot, receipt, etc.) and are never hardcoded.
+
+export type OcrExtractionStatus = 'pending' | 'processing' | 'completed' | 'failed'
+
+export interface OcrExtraction {
+  /** OCR engine identifier (e.g. 'openai-gpt4o', 'google-vision', 'tesseract') */
+  engine: string | null
+  /** Processing state tracked in the DB */
+  status: OcrExtractionStatus
+  /** Arbitrary key/value pairs — keys vary by document type, never hardcoded */
+  structuredData: Record<string, unknown> | null
+  /** Full raw text from the OCR pass, if stored */
+  rawText: string | null
+  /** Engine-reported confidence score 0–100 */
+  confidence: number | null
+  /** Wall-clock processing time in milliseconds */
+  processingMs: number | null
+  /** ISO 8601 timestamp of the extraction row */
+  extractedAt: string
+}
+
 export interface ReviewFraudCheck {
   label: string
   detail: string
@@ -48,6 +72,19 @@ export interface ReviewDetail {
   fraudChecks: ReviewFraudCheck[]
   reasoning: string[]
   auditLog: AuditEntry[]
+  /** Signed storage URL for the uploaded file (server-generated, ~1 h TTL). Null for demo reviews. */
+  fileUrl?: string | null
+  /** MIME type of the uploaded file, e.g. "image/png" or "application/pdf". */
+  fileMimeType?: string | null
+  /** Original filename as stored in review_files. */
+  fileName?: string | null
+  /**
+   * Latest OCR extraction row for this review.
+   * Undefined = not yet fetched (demo reviews).
+   * Null = fetched but no extraction row exists.
+   * OcrExtraction = extraction data present.
+   */
+  ocrExtraction?: OcrExtraction | null
 }
 
 export const REVIEWS: Record<string, ReviewDetail> = {

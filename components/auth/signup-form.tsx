@@ -3,32 +3,38 @@
 import { useActionState, useEffect, useRef, useState, useTransition } from 'react'
 import Link from 'next/link'
 import { signUpWithPassword, signInWithGoogle, resendConfirmationEmail } from '@/lib/actions/auth'
+import type { AuthState } from '@/lib/actions/auth'
 import { IconShieldAlert } from '@/components/icons'
 import { Spinner, GoogleIcon } from '@/components/auth/auth-shared'
 
 export function SignupForm() {
-  const [state, action, isPending] = useActionState(signUpWithPassword, null)
-  const [resendState, resendAction, isResendPending] = useActionState(resendConfirmationEmail, null)
+  const [state, action, isPending] = useActionState<AuthState, FormData>(signUpWithPassword, null)
+  const [resendState, resendAction, isResendPending] = useActionState<AuthState, FormData>(resendConfirmationEmail, null)
   const [isGooglePending, startGoogleTransition] = useTransition()
   const [cooldown, setCooldown] = useState(0)
   const prevResendPendingRef = useRef(false)
 
-  const error = state && 'error' in state ? state.error : null
-  const isEmailScreen = !!(state && ('success' in state || 'rateLimited' in state))
+  // ── Derive state flags ──────────────────────────────────────────────────────
+  const hasError      = !!(state && 'error' in state)
+  const isSuccess     = !!(state && 'success' in state)
   const isRateLimited = !!(state && 'rateLimited' in state)
-  const pendingEmail =
-    state && ('success' in state || 'rateLimited' in state || 'unconfirmed' in state)
-      ? (state as { email?: string }).email
-      : undefined
-  const anyPending = isPending || isGooglePending
+  const isGhost       = !!(state && 'ghost' in state)
+  // Email screen shows for any non-error, non-null state that has an email to resend to
+  const isEmailScreen = isSuccess || isRateLimited || isGhost
 
-  const resendError = resendState && 'error' in resendState ? resendState.error : null
-  const resendRateLimited = resendState && 'rateLimited' in resendState
-    ? (resendState as { rateLimited: string }).rateLimited
-    : null
-  const resendSuccess = resendState && 'success' in resendState
+  const pendingEmail = isEmailScreen
+    ? (state as { email?: string }).email
+    : undefined
 
-  // Start 60s cooldown when a resend action completes
+  const errorMessage = hasError ? (state as { error: string }).error : null
+  const anyPending   = isPending || isGooglePending
+
+  // ── Resend state ────────────────────────────────────────────────────────────
+  const resendError       = resendState && 'error' in resendState ? (resendState as { error: string }).error : null
+  const resendRateLimited = resendState && 'rateLimited' in resendState ? (resendState as { rateLimited: string }).rateLimited : null
+  const resendSuccessMsg  = resendState && 'success' in resendState ? (resendState as { success: string }).success : null
+
+  // 60s cooldown after any resend attempt completes
   useEffect(() => {
     if (prevResendPendingRef.current && !isResendPending) {
       setCooldown(60)
@@ -36,12 +42,18 @@ export function SignupForm() {
     prevResendPendingRef.current = isResendPending
   }, [isResendPending])
 
-  // Decrement cooldown every second
   useEffect(() => {
     if (cooldown <= 0) return
     const timer = setTimeout(() => setCooldown(c => c - 1), 1000)
     return () => clearTimeout(timer)
   }, [cooldown])
+
+  // Dev-only: log final auth state to browser console on every change
+  useEffect(() => {
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[signup-form] state:', JSON.stringify(state))
+    }
+  }, [state])
 
   function handleGoogleSignIn() {
     startGoogleTransition(async () => {
@@ -64,22 +76,31 @@ export function SignupForm() {
       <div className="rounded-xl border border-slate-800/80 bg-slate-900/60 p-6 shadow-2xl backdrop-blur-sm">
         {isEmailScreen ? (
           <div className="py-2 text-center">
-            <div className={`mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full ${isRateLimited ? 'bg-amber-500/10 text-amber-400' : 'bg-emerald-500/10 text-emerald-400'}`}>
+            <div className={`mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full ${
+              isRateLimited ? 'bg-amber-500/10 text-amber-400' : 'bg-emerald-500/10 text-emerald-400'
+            }`}>
               <svg className="h-7 w-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75" />
               </svg>
             </div>
 
-            <h2 className="mb-1.5 text-sm font-semibold text-slate-200">
-              {isRateLimited ? 'Too many requests' : 'Check your email'}
-            </h2>
-
             {isRateLimited ? (
-              <p className="text-xs text-slate-500 leading-relaxed">
-                {(state as { rateLimited: string }).rateLimited}
-              </p>
+              <>
+                <h2 className="mb-1.5 text-sm font-semibold text-slate-200">Too many requests</h2>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  {(state as { rateLimited: string }).rateLimited}
+                </p>
+              </>
+            ) : isGhost ? (
+              <>
+                <h2 className="mb-1.5 text-sm font-semibold text-slate-200">Check your inbox</h2>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  {(state as { ghost: string }).ghost}
+                </p>
+              </>
             ) : (
               <>
+                <h2 className="mb-1.5 text-sm font-semibold text-slate-200">Check your email</h2>
                 <p className="text-xs text-slate-500 leading-relaxed">We sent a confirmation link to</p>
                 {pendingEmail && (
                   <p className="mt-0.5 text-xs font-medium text-slate-300">{pendingEmail}</p>
@@ -90,9 +111,10 @@ export function SignupForm() {
               </>
             )}
 
+            {/* Resend section */}
             <div className="mt-5 border-t border-slate-800 pt-4">
-              {resendSuccess ? (
-                <p className="text-xs text-emerald-400">Confirmation email resent. Check your inbox.</p>
+              {resendSuccessMsg ? (
+                <p className="text-xs text-emerald-400">{resendSuccessMsg}</p>
               ) : (
                 <>
                   {(resendError || resendRateLimited) && (
@@ -159,9 +181,9 @@ export function SignupForm() {
             </div>
 
             {/* Error */}
-            {error && (
+            {errorMessage && (
               <div className="mb-4 rounded-lg border border-red-500/20 bg-red-500/8 px-3 py-2.5">
-                <p className="text-xs text-red-400">{error}</p>
+                <p className="text-xs text-red-400">{errorMessage}</p>
               </div>
             )}
 
@@ -258,6 +280,16 @@ export function SignupForm() {
       <p className="mt-6 text-center text-[11px] text-slate-600">
         By creating an account you agree to our terms of service.
       </p>
+
+      {/* Dev-only debug panel */}
+      {process.env.NODE_ENV === 'development' && state !== null && (
+        <details className="mt-4 rounded border border-slate-700 bg-slate-900/80 p-2 text-[10px] text-slate-500">
+          <summary className="cursor-pointer font-mono">auth state (dev)</summary>
+          <pre className="mt-1 overflow-auto whitespace-pre-wrap break-all font-mono">
+            {JSON.stringify(state, null, 2)}
+          </pre>
+        </details>
+      )}
     </div>
   )
 }

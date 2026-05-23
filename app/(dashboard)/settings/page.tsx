@@ -9,7 +9,7 @@ import {
   IconSettings, IconShieldAlert, IconUsers, IconActivity, IconZap,
   IconCheck, IconCopy, IconLink, IconX, IconPlus, IconRefresh, IconUser,
 } from '@/components/icons'
-import { updateProfile, changePassword } from '@/lib/actions/auth'
+import { updateProfile, changePassword, updateOrganization } from '@/lib/actions/auth'
 import { Spinner } from '@/components/auth/auth-shared'
 import { createClient } from '@/lib/supabase/client'
 
@@ -139,45 +139,150 @@ const INPUT_CLS = 'w-full rounded-md border border-slate-700 bg-slate-800/60 px-
 const SELECT_CLS = 'rounded-md border border-slate-700 bg-slate-800/60 px-3 py-2 text-sm text-slate-200 outline-none focus:border-indigo-500/60 transition-colors'
 const THRESHOLD_INPUT_CLS = 'w-16 rounded-md border border-slate-700 bg-slate-800/60 px-2 py-1.5 text-sm text-slate-200 outline-none focus:border-indigo-500/60 text-center'
 
+// ─── Skeleton ─────────────────────────────────────────────────────────────────
+
+function FieldSkeleton() {
+  return <div className="h-9 w-full rounded-md bg-slate-800/60 animate-pulse" />
+}
+
 // ─── Section: General ─────────────────────────────────────────────────────────
 
 function GeneralSection() {
-  const org = useSaveState()
   const review = useSaveState()
+  const [orgState, orgAction, isOrgPending] = useActionState(updateOrganization, null)
+
+  const [orgName,       setOrgName]       = useState('')
+  const [orgSlug,       setOrgSlug]       = useState('')
+  const [billingEmail,  setBillingEmail]  = useState('')
+  const [orgPlan,       setOrgPlan]       = useState('')
+  const [userRole,      setUserRole]      = useState('')
+  const [orgLoaded,     setOrgLoaded]     = useState(false)
+
+  useEffect(() => {
+    const supabase = createClient()
+    // Use SECURITY DEFINER RPC — direct PostgREST queries on organization_members
+    // and organizations are both blocked by the is_org_member() circular RLS policy.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(supabase as any)
+      .rpc('get_my_active_membership')
+      .then(({ data }: { data: Record<string, unknown> | null }) => {
+        if (data) {
+          setOrgName((data.org_name as string) ?? '')
+          setOrgSlug((data.org_slug as string) ?? '')
+          setBillingEmail((data.org_billing_email as string) ?? '')
+          setOrgPlan((data.org_plan as string) ?? '')
+          setUserRole((data.role as string) ?? '')
+        }
+        setOrgLoaded(true)
+      })
+  }, [])
+
+  const orgError   = orgState && 'error'   in orgState ? orgState.error   : null
+  const orgSuccess = orgState && 'success' in orgState ? orgState.success : null
+  const canEdit    = orgLoaded && (userRole === 'admin' || userRole === 'manager')
 
   return (
     <div className="space-y-4">
       <Card padding="md">
-        <h3 className="text-sm font-semibold text-slate-100 mb-4">Organization</h3>
-        <div className="space-y-3">
-          <div>
-            <label className="text-xs font-medium text-slate-400 block mb-1.5">Organization Name</label>
-            <input defaultValue="ProofPilot Corp" className={INPUT_CLS} />
-          </div>
-          <div>
-            <label className="text-xs font-medium text-slate-400 block mb-1.5">Workspace Slug</label>
-            <div className="flex items-center rounded-md border border-slate-700 bg-slate-800/60 overflow-hidden">
-              <span className="px-3 py-2 text-sm text-slate-500 border-r border-slate-700 bg-slate-900/60 shrink-0">
-                app.proofpilot.ai/
-              </span>
-              <input defaultValue="proofpilot-corp" className="flex-1 px-3 py-2 text-sm text-slate-200 bg-transparent outline-none" />
-            </div>
-          </div>
-          <div>
-            <label className="text-xs font-medium text-slate-400 block mb-1.5">Contact Email</label>
-            <input defaultValue="premcbc23@gmail.com" className={INPUT_CLS} />
-          </div>
-          <div>
-            <label className="text-xs font-medium text-slate-400 block mb-1.5">Timezone</label>
-            <select defaultValue="UTC+05:30" className={`${SELECT_CLS} w-full`}>
-              <option value="UTC+00:00">UTC+00:00 — London</option>
-              <option value="UTC-05:00">UTC-05:00 — New York</option>
-              <option value="UTC-08:00">UTC-08:00 — Los Angeles</option>
-              <option value="UTC+05:30">UTC+05:30 — Mumbai</option>
-            </select>
-          </div>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-semibold text-slate-100">Organization</h3>
+          {orgLoaded && userRole && (
+            <span className="rounded-full bg-indigo-500/10 px-2 py-0.5 text-[10px] font-semibold text-indigo-400 capitalize">
+              {userRole}
+            </span>
+          )}
         </div>
-        <SaveBar state={org.state} onSave={org.save} onReset={org.reset} />
+
+        {orgError && (
+          <div className="mb-3 rounded-lg border border-red-500/20 bg-red-500/8 px-3 py-2.5">
+            <p className="text-xs text-red-400">{orgError}</p>
+          </div>
+        )}
+        {orgSuccess && (
+          <div className="mb-3 rounded-lg border border-emerald-500/20 bg-emerald-500/8 px-3 py-2.5">
+            <p className="text-xs text-emerald-400">{orgSuccess}</p>
+          </div>
+        )}
+
+        {!canEdit && !orgLoaded && (
+          /* Skeleton while loading */
+          <div className="space-y-3">
+            {[...Array(3)].map((_, i) => (
+              <div key={i}>
+                <div className="h-3 w-24 rounded bg-slate-800/60 animate-pulse mb-1.5" />
+                <FieldSkeleton />
+              </div>
+            ))}
+          </div>
+        )}
+
+        {orgLoaded && (
+          <form action={orgAction} className="space-y-3">
+            <div>
+              <label className="text-xs font-medium text-slate-400 block mb-1.5">Organization Name</label>
+              <input
+                name="orgName"
+                type="text"
+                required
+                disabled={isOrgPending || !canEdit}
+                value={orgName}
+                onChange={(e) => setOrgName(e.target.value)}
+                placeholder="Your organization"
+                className={canEdit ? INPUT_CLS : `${INPUT_CLS} opacity-60 cursor-not-allowed`}
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-slate-400 block mb-1.5">Workspace Slug</label>
+              <div className="flex items-center rounded-md border border-slate-700 bg-slate-800/60 overflow-hidden">
+                <span className="px-3 py-2 text-sm text-slate-500 border-r border-slate-700 bg-slate-900/60 shrink-0">
+                  app.proofpilot.ai/
+                </span>
+                <input
+                  value={orgSlug}
+                  readOnly
+                  disabled
+                  className="flex-1 px-3 py-2 text-sm text-slate-400 bg-transparent outline-none opacity-70 cursor-not-allowed"
+                />
+              </div>
+              <p className="mt-1 text-[11px] text-slate-500">Slug cannot be changed after creation.</p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-medium text-slate-400 block mb-1.5">Billing Email</label>
+                <input
+                  name="billingEmail"
+                  type="email"
+                  disabled={isOrgPending || !canEdit}
+                  value={billingEmail}
+                  onChange={(e) => setBillingEmail(e.target.value)}
+                  placeholder="billing@yourcompany.com"
+                  className={canEdit ? INPUT_CLS : `${INPUT_CLS} opacity-60 cursor-not-allowed`}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-slate-400 block mb-1.5">Plan</label>
+                <input
+                  value={orgPlan || 'free'}
+                  readOnly
+                  disabled
+                  className={`${INPUT_CLS} opacity-60 cursor-not-allowed capitalize`}
+                />
+              </div>
+            </div>
+            {canEdit ? (
+              <div className="flex justify-end pt-1">
+                <Button variant="primary" size="sm" type="submit" disabled={isOrgPending}>
+                  {isOrgPending && <Spinner />}
+                  {isOrgPending ? 'Saving…' : 'Save Changes'}
+                </Button>
+              </div>
+            ) : (
+              <p className="text-[11px] text-slate-500 pt-1">
+                Only admins and managers can edit organization settings.
+              </p>
+            )}
+          </form>
+        )}
       </Card>
 
       <Card padding="md">

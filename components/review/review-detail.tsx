@@ -7,7 +7,7 @@ import {
   type ReviewDetail as ReviewDetailType,
   type AuditEntry,
   type ReviewFraudCheck,
-  type ReviewOcrField,
+  type OcrExtraction,
 } from '@/lib/review-data'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -76,9 +76,12 @@ const actorBadge: Record<string, string> = {
   human:  'text-emerald-400 bg-emerald-500/10 border-emerald-500/20',
 }
 
-// ─── MockReceipt ─────────────────────────────────────────────────────────────
+// ─── SubmissionPreviewCard ────────────────────────────────────────────────────
+//
+// Renders the uploaded file when a signed URL is available; falls back to the
+// mock receipt for demo reviews or when storage is unreachable.
 
-function MockReceipt({ review }: { review: ReviewDetailType }) {
+function MockReceiptInner({ review }: { review: ReviewDetailType }) {
   const username  = review.ocrFields.find(f => f.label === 'Username')
   const amount    = review.ocrFields.find(f => f.label === 'Amount')
   const platform  = review.ocrFields.find(f => f.label === 'Platform')
@@ -88,7 +91,147 @@ function MockReceipt({ review }: { review: ReviewDetailType }) {
   const isFlagged = review.status === 'flagged'
 
   return (
+    <>
+      <div
+        aria-hidden="true"
+        className={[
+          'rounded-lg p-4 select-none border',
+          isFlagged
+            ? 'bg-gradient-to-br from-red-950/40 to-slate-900 border-red-900/30'
+            : 'bg-gradient-to-br from-slate-800 to-slate-900 border-slate-700/60',
+        ].join(' ')}
+      >
+        <div className="flex items-center justify-between mb-3 pb-2.5 border-b border-slate-700/40">
+          <div className="flex items-center gap-1.5">
+            <div className="w-2.5 h-2.5 rounded-full bg-red-400/60" />
+            <div className="w-2.5 h-2.5 rounded-full bg-amber-400/60" />
+            <div className="w-2.5 h-2.5 rounded-full bg-emerald-400/60" />
+          </div>
+          <span className="text-slate-500 text-[10px] font-mono">
+            {platform?.value ?? 'app'}.receipt
+          </span>
+          <div className="w-12" />
+        </div>
+        <div className="text-center space-y-2 py-2">
+          <p className="text-[10px] text-slate-500 uppercase tracking-widest font-semibold">
+            Payment Confirmation
+          </p>
+          <p className={`text-3xl font-bold tabular-nums ${isFlagged ? 'text-red-300' : 'text-slate-100'}`}>
+            {amount?.value ?? '$0.00'}
+          </p>
+          <p className="text-[11px] text-slate-400">
+            Submitted by{' '}
+            <span className={`font-semibold ${isFlagged ? 'text-red-300' : 'text-slate-200'}`}>
+              {username?.value ?? 'unknown'}
+            </span>
+          </p>
+          <p className="text-[10px] text-slate-600 font-mono">{timestamp?.value ?? ''}</p>
+          {orderNum && <p className="text-[9px] text-slate-700 font-mono">{orderNum.value}</p>}
+        </div>
+        <div className="flex justify-center mt-3 mb-2">
+          {isFlagged ? (
+            <div className="inline-flex items-center gap-1.5 rounded-full bg-red-500/10 border border-red-500/20 px-3 py-1">
+              <div className="w-1.5 h-1.5 rounded-full bg-red-400" />
+              <span className="text-[10px] text-red-400 font-medium">Suspicious Transaction</span>
+            </div>
+          ) : (
+            <div className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 px-3 py-1">
+              <div className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+              <span className="text-[10px] text-emerald-400 font-medium">Transaction Complete</span>
+            </div>
+          )}
+        </div>
+        <div className="flex items-end gap-px justify-center mt-3 opacity-20">
+          {BARCODE.map((w, i) => (
+            <div key={i} className="bg-slate-300" style={{ width: w, height: i % 5 === 0 ? 22 : 16 }} />
+          ))}
+        </div>
+      </div>
+      {isFlagged && (
+        <div className="mt-3 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2.5 flex items-start gap-2.5">
+          <IconAlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />
+          <p className="text-[10px] text-red-300 leading-relaxed">
+            Forensic analysis detected image manipulation in the amount field region. Clone stamp artifacts are visible under UV filter.
+          </p>
+        </div>
+      )}
+    </>
+  )
+}
+
+// ── Render-mode type ──────────────────────────────────────────────────────────
+type PreviewRenderMode = 'image' | 'pdf' | 'video' | 'mixed' | 'mock'
+
+/**
+ * Determine the render mode deterministically.
+ *
+ * Priority:
+ *  1. review.fileType (DB reviews.type — screenshot | document | video | mixed)
+ *     → set at upload time from either manual selection or mimeToType()
+ *     → most reliable source; trust it unconditionally when fileUrl is present
+ *
+ *  2. MIME + filename extension fallback
+ *     → only used when fileType is absent/unknown (demo reviews, legacy data)
+ *     → guards against Supabase returning application/octet-stream,
+ *       application/pdf; charset=utf-8, image/jpg, etc.
+ *
+ * Never returns a real render mode when fileUrl is absent.
+ */
+function selectRenderMode(
+  fileUrl: string | null | undefined,
+  reviewType: string,          // review.fileType = DB reviews.type
+  fileMimeType: string | null | undefined,
+  fileName: string | null | undefined,
+): PreviewRenderMode {
+  if (!fileUrl) return 'mock'
+
+  // ── Primary: DB review type ──────────────────────────────────────────────
+  if (reviewType === 'screenshot') return 'image'
+  if (reviewType === 'document')   return 'pdf'
+  if (reviewType === 'video')      return 'video'
+  if (reviewType === 'mixed')      return 'mixed'
+
+  // ── Fallback: MIME + filename (demo reviews / legacy rows without type) ──
+  const mime = (fileMimeType ?? '').toLowerCase()
+  const ext  = (fileName ?? '').toLowerCase().split('.').pop() ?? ''
+
+  const isImage = mime.startsWith('image/') ||
+    ['png', 'jpg', 'jpeg', 'webp'].includes(ext)
+  const isPdf   = mime.includes('pdf') || ext === 'pdf'
+
+  if (isImage) return 'image'
+  if (isPdf)   return 'pdf'
+
+  return 'mock'
+}
+
+function SubmissionPreviewCard({ review }: { review: ReviewDetailType }) {
+  const { fileUrl, fileMimeType, fileName } = review
+  // Track which URL errored so the error state resets automatically when fileUrl changes —
+  // avoids a useEffect setState which triggers cascading re-renders.
+  const [imgErrorUrl, setImgErrorUrl] = useState<string | null>(null)
+  const imgError = imgErrorUrl === fileUrl && fileUrl !== null
+
+  // review.fileType maps to DB reviews.type (screenshot | document | video | mixed)
+  const reviewType = review.fileType
+
+  const renderMode = selectRenderMode(fileUrl, reviewType, fileMimeType, fileName)
+
+  // Structured log — visible in browser DevTools console
+  useEffect(() => {
+    console.log('[SubmissionPreview]', {
+      'review.type':       reviewType,
+      fileMimeType:        fileMimeType ?? 'null',
+      fileName:            fileName     ?? 'null',
+      hasFileUrl:          !!fileUrl,
+      selectedRenderMode:  renderMode,
+      fileUrl:             fileUrl ? fileUrl.slice(0, 100) + (fileUrl.length > 100 ? '…' : '') : 'null',
+    })
+  }, [reviewType, fileMimeType, fileName, fileUrl, renderMode])
+
+  return (
     <div className="rounded-xl border border-slate-800/80 bg-slate-900/50 shadow-sm overflow-hidden">
+      {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800/60">
         <div className="flex items-center gap-2.5">
           <div className="flex h-6 w-6 items-center justify-center rounded-md bg-indigo-500/10 text-indigo-400">
@@ -96,71 +239,97 @@ function MockReceipt({ review }: { review: ReviewDetailType }) {
           </div>
           <span className="text-xs font-semibold text-slate-200">Submission Preview</span>
         </div>
-        <span className="text-[10px] text-slate-600 font-mono">{review.fileType} · {review.fileSize}</span>
+        <span className="text-[10px] text-slate-600 font-mono">
+          {fileName
+            ? (fileName.length > 28 ? fileName.slice(0, 27) + '…' : fileName)
+            : reviewType}
+          {review.fileSize !== '—' && ` · ${review.fileSize}`}
+        </span>
       </div>
-      <div className="p-4">
-        <div
-          aria-hidden="true"
-          className={[
-            'rounded-lg p-4 select-none border',
-            isFlagged
-              ? 'bg-gradient-to-br from-red-950/40 to-slate-900 border-red-900/30'
-              : 'bg-gradient-to-br from-slate-800 to-slate-900 border-slate-700/60',
-          ].join(' ')}
-        >
-          <div className="flex items-center justify-between mb-3 pb-2.5 border-b border-slate-700/40">
-            <div className="flex items-center gap-1.5">
-              <div className="w-2.5 h-2.5 rounded-full bg-red-400/60" />
-              <div className="w-2.5 h-2.5 rounded-full bg-amber-400/60" />
-              <div className="w-2.5 h-2.5 rounded-full bg-emerald-400/60" />
+
+      {/* ── Temporary debug panel ────────────────────────────────────────────
+           Shows render-path decisions inline so issues are immediately visible.
+           Remove once preview rendering is confirmed stable. */}
+      <div className="mx-4 mt-3 rounded border border-slate-700/40 bg-slate-800/30 px-3 py-2 font-mono text-[10px]">
+        <p className="text-[9px] font-semibold uppercase tracking-widest text-slate-600 mb-1.5">Preview Debug</p>
+        <div className="space-y-0.5">
+          {([
+            ['review.type',       reviewType],
+            ['fileMimeType',      fileMimeType ?? 'null'],
+            ['fileName',          fileName     ?? 'null'],
+            ['hasFileUrl',        String(!!fileUrl)],
+            ['selectedRenderMode', renderMode],
+          ] as const).map(([k, v]) => (
+            <div key={k} className="flex gap-2">
+              <span className="text-slate-600 shrink-0 w-36">{k}:</span>
+              <span className={k === 'selectedRenderMode' ? 'text-indigo-400 font-bold' : 'text-slate-300'}>{v}</span>
             </div>
-            <span className="text-slate-500 text-[10px] font-mono">
-              {platform?.value ?? 'app'}.receipt
-            </span>
-            <div className="w-12" />
-          </div>
-          <div className="text-center space-y-2 py-2">
-            <p className="text-[10px] text-slate-500 uppercase tracking-widest font-semibold">
-              Payment Confirmation
-            </p>
-            <p className={`text-3xl font-bold tabular-nums ${isFlagged ? 'text-red-300' : 'text-slate-100'}`}>
-              {amount?.value ?? '$0.00'}
-            </p>
-            <p className="text-[11px] text-slate-400">
-              Submitted by{' '}
-              <span className={`font-semibold ${isFlagged ? 'text-red-300' : 'text-slate-200'}`}>
-                {username?.value ?? 'unknown'}
-              </span>
-            </p>
-            <p className="text-[10px] text-slate-600 font-mono">{timestamp?.value ?? ''}</p>
-            {orderNum && <p className="text-[9px] text-slate-700 font-mono">{orderNum.value}</p>}
-          </div>
-          <div className="flex justify-center mt-3 mb-2">
-            {isFlagged ? (
-              <div className="inline-flex items-center gap-1.5 rounded-full bg-red-500/10 border border-red-500/20 px-3 py-1">
-                <div className="w-1.5 h-1.5 rounded-full bg-red-400" />
-                <span className="text-[10px] text-red-400 font-medium">Suspicious Transaction</span>
-              </div>
-            ) : (
-              <div className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 px-3 py-1">
-                <div className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                <span className="text-[10px] text-emerald-400 font-medium">Transaction Complete</span>
-              </div>
-            )}
-          </div>
-          <div className="flex items-end gap-px justify-center mt-3 opacity-20">
-            {BARCODE.map((w, i) => (
-              <div key={i} className="bg-slate-300" style={{ width: w, height: i % 5 === 0 ? 22 : 16 }} />
-            ))}
-          </div>
+          ))}
         </div>
-        {isFlagged && (
-          <div className="mt-3 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2.5 flex items-start gap-2.5">
-            <IconAlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />
-            <p className="text-[10px] text-red-300 leading-relaxed">
-              Forensic analysis detected image manipulation in the amount field region. Clone stamp artifacts are visible under UV filter.
+      </div>
+
+      {/* Body */}
+      <div className="p-4">
+        {renderMode === 'image' && !imgError ? (
+          /* ── Screenshot / image ─────────────────────────────────── */
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={fileUrl!}
+            alt={fileName ?? 'Submission preview'}
+            className="w-full h-auto rounded-lg object-contain max-h-[480px]"
+            onLoad={() => console.log('[SubmissionPreview] image loaded')}
+            onError={() => {
+              console.error('[SubmissionPreview] image failed to load — signed URL may have expired')
+              setImgErrorUrl(fileUrl ?? null)
+            }}
+          />
+        ) : renderMode === 'image' && imgError ? (
+          /* ── Image load error ───────────────────────────────────── */
+          <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-6 text-center">
+            <p className="text-xs font-semibold text-amber-300 mb-1">Image could not be loaded</p>
+            <p className="text-[10px] text-slate-500 mb-3">
+              The signed URL may have expired (1-hour TTL). Refresh the page to generate a new one.
+            </p>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="text-[10px] text-indigo-400 hover:text-indigo-300 transition-colors"
+            >
+              Refresh page
+            </button>
+          </div>
+        ) : renderMode === 'pdf' ? (
+          /* ── Document / PDF ─────────────────────────────────────── */
+          <iframe
+            src={fileUrl!}
+            title={fileName ?? 'PDF preview'}
+            className="w-full rounded-lg border border-slate-700/40"
+            style={{ height: '480px' }}
+            onLoad={() => console.log('[SubmissionPreview] PDF iframe loaded')}
+          />
+        ) : renderMode === 'video' ? (
+          /* ── Video ──────────────────────────────────────────────── */
+          <video
+            src={fileUrl!}
+            controls
+            className="w-full rounded-lg max-h-[480px] bg-black"
+            onLoadedMetadata={() => console.log('[SubmissionPreview] video metadata loaded')}
+            onError={() => console.error('[SubmissionPreview] video failed to load')}
+          />
+        ) : renderMode === 'mixed' ? (
+          /* ── Mixed / multi-file placeholder ─────────────────────── */
+          <div className="rounded-lg border border-slate-700/40 bg-slate-800/30 px-4 py-8 text-center">
+            <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-slate-700/60">
+              <IconEye className="w-5 h-5 text-slate-400" />
+            </div>
+            <p className="text-xs font-semibold text-slate-300 mb-1">Mixed submission</p>
+            <p className="text-[10px] text-slate-500">
+              This review contains multiple files. Gallery view coming soon.
             </p>
           </div>
+        ) : (
+          /* ── Demo / no file ─────────────────────────────────────── */
+          <MockReceiptInner review={review} />
         )}
       </div>
     </div>
@@ -215,55 +384,248 @@ function SubmissionMeta({ review }: { review: ReviewDetailType }) {
   )
 }
 
-// ─── OCR fields ──────────────────────────────────────────────────────────────
+// ─── OCR Extraction card ──────────────────────────────────────────────────────
+//
+// Generic renderer — supports any document type (invoice, screenshot, receipt, etc.)
+// without hardcoding field names.  Handles 4 states: no-data, processing, failed, success.
 
-function OcrFieldsCard({ fields }: { fields: ReviewOcrField[] }) {
+/** snake_case / camelCase / PascalCase → Title Case */
+function fmtKey(k: string): string {
+  return k
+    .replace(/_/g, ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .split(' ')
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ')
+}
+
+function fmtValue(v: unknown): string {
+  if (v === null || v === undefined) return '—'
+  if (typeof v === 'object') return JSON.stringify(v)
+  return String(v)
+}
+
+function fmtTs(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString('en-US', {
+      month: 'short', day: 'numeric',
+      hour: '2-digit', minute: '2-digit', timeZone: 'UTC',
+    }) + ' UTC'
+  } catch {
+    return iso
+  }
+}
+
+function MetaChip({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center gap-1">
+      <span className="text-[9px] font-semibold text-slate-600 uppercase tracking-wider">{label}</span>
+      <span className="text-[10px] font-mono text-slate-400">{value}</span>
+    </div>
+  )
+}
+
+function OcrExtractionCard({ ocrExtraction }: { ocrExtraction?: OcrExtraction | null }) {
+  // ── Console log on mount / change ─────────────────────────────────────────
+  useEffect(() => {
+    if (!ocrExtraction) {
+      console.log('[OcrExtraction] status: no-extraction (undefined/null)')
+      return
+    }
+    const structuredKeys = ocrExtraction.structuredData
+      ? Object.keys(ocrExtraction.structuredData)
+      : []
+    const renderPath =
+      ocrExtraction.status === 'completed' && structuredKeys.length > 0
+        ? 'structured-fields'
+        : ocrExtraction.status === 'completed' && ocrExtraction.rawText
+        ? 'raw-text'
+        : ocrExtraction.status
+    console.log('[OcrExtraction]', {
+      status:           ocrExtraction.status,
+      engine:           ocrExtraction.engine    ?? 'unknown',
+      confidence:       ocrExtraction.confidence,
+      processingMs:     ocrExtraction.processingMs,
+      structuredKeys,
+      hasRawText:       !!ocrExtraction.rawText,
+      renderPath,
+    })
+  }, [ocrExtraction])
+
+  // ── Derived header state ───────────────────────────────────────────────────
+  const isNone       = !ocrExtraction
+  const isProcessing = !!ocrExtraction && (ocrExtraction.status === 'pending' || ocrExtraction.status === 'processing')
+  const isFailed     = ocrExtraction?.status === 'failed'
+  const isSuccess    = ocrExtraction?.status === 'completed'
+
+  const fieldCount = isSuccess && ocrExtraction.structuredData
+    ? Object.keys(ocrExtraction.structuredData).length
+    : 0
+
+  const statusBadge = isNone
+    ? { label: 'No Data',    cls: 'text-slate-500 bg-slate-800/60 border-slate-700/40' }
+    : isProcessing
+    ? { label: 'Processing', cls: 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20' }
+    : isFailed
+    ? { label: 'Failed',     cls: 'text-red-400 bg-red-500/10 border-red-500/20' }
+    : { label: 'Complete',   cls: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' }
+
+  const subtitle = isNone
+    ? 'No extraction available'
+    : isProcessing
+    ? 'Running OCR…'
+    : isFailed
+    ? 'Extraction failed'
+    : `${fieldCount} field${fieldCount !== 1 ? 's' : ''} extracted`
+
+  // SVG icon shared across header
+  const docIcon = (
+    <svg className="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+    </svg>
+  )
+
   return (
     <Card padding="none">
+      {/* ── Header ──────────────────────────────────────────────────────────── */}
       <div className="flex items-center gap-2.5 px-4 py-3 border-b border-slate-800/60">
         <div className="flex h-6 w-6 items-center justify-center rounded-md bg-violet-500/10 text-violet-400">
-          <svg className="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
-            <path d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-          </svg>
+          {docIcon}
         </div>
         <div>
           <span className="text-xs font-semibold text-slate-200">OCR Extraction</span>
-          <p className="text-[10px] text-slate-500 mt-0.5">{fields.length} fields extracted</p>
+          <p className="text-[10px] text-slate-500 mt-0.5">{subtitle}</p>
         </div>
-        <span className="ml-auto text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-full px-2 py-0.5">
-          Complete
+        <span className={`ml-auto text-[10px] font-semibold border rounded-full px-2 py-0.5 ${statusBadge.cls}`}>
+          {statusBadge.label}
         </span>
       </div>
-      <div className="p-4 space-y-2">
-        {fields.map((field, i) => (
-          <motion.div
-            key={field.label}
-            initial={{ opacity: 0, x: -12 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ duration: 0.3, delay: i * 0.05, ease: 'easeOut' }}
-            className="flex items-center justify-between gap-4 rounded-lg border border-slate-800/60 bg-slate-800/30 px-3 py-2.5"
-          >
-            <div className="flex-1 min-w-0">
-              <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">{field.label}</p>
-              <p className={`text-xs font-mono font-semibold mt-0.5 truncate ${field.confidence < 50 ? 'text-amber-300' : 'text-slate-100'}`}>
-                {field.value}
-              </p>
+
+      {/* ── Body ────────────────────────────────────────────────────────────── */}
+      <div className="p-4">
+
+        {/* State A — no extraction ──────────────────────────────────────────── */}
+        {isNone && (
+          <div className="rounded-lg border border-slate-800/60 bg-slate-800/20 px-4 py-8 text-center">
+            <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-slate-800/60 text-slate-600">
+              {docIcon}
             </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <div className="h-1 w-12 rounded-full bg-slate-800 overflow-hidden">
-                <motion.div
-                  className={`h-full rounded-full ${field.confidence >= 80 ? 'bg-indigo-500' : field.confidence >= 50 ? 'bg-amber-500' : 'bg-red-500'}`}
-                  initial={{ width: 0 }}
-                  animate={{ width: `${field.confidence}%` }}
-                  transition={{ duration: 0.5, delay: 0.2 + i * 0.04, ease: 'easeOut' }}
-                />
+            <p className="text-xs font-semibold text-slate-400 mb-1">No extraction available</p>
+            <p className="text-[10px] text-slate-600 leading-relaxed">
+              OCR has not been run on this submission yet.
+            </p>
+          </div>
+        )}
+
+        {/* State B — processing ─────────────────────────────────────────────── */}
+        {isProcessing && (
+          <div className="rounded-lg border border-indigo-500/15 bg-indigo-500/5 px-4 py-8 text-center">
+            <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center">
+              <motion.div
+                className="w-6 h-6 rounded-full border-2 border-indigo-500 border-t-transparent"
+                animate={{ rotate: 360 }}
+                transition={{ duration: 0.8, repeat: Infinity, ease: 'linear' }}
+              />
+            </div>
+            <p className="text-xs font-semibold text-indigo-300 mb-1">Running OCR…</p>
+            <p className="text-[10px] text-slate-500">
+              {ocrExtraction!.engine
+                ? `Engine: ${ocrExtraction!.engine}`
+                : 'Extraction in progress'}
+            </p>
+          </div>
+        )}
+
+        {/* State C — failed ─────────────────────────────────────────────────── */}
+        {isFailed && (
+          <div className="space-y-3">
+            <div className="rounded-lg border border-red-500/20 bg-red-500/5 px-4 py-5">
+              <div className="flex items-start gap-3">
+                <IconAlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-xs font-semibold text-red-300 mb-1">Extraction failed</p>
+                  <p className="text-[10px] text-slate-500 leading-relaxed">
+                    {ocrExtraction!.engine
+                      ? `The ${ocrExtraction!.engine} engine encountered an error processing this file.`
+                      : 'The OCR engine encountered an error processing this file.'}
+                  </p>
+                </div>
               </div>
-              <span className={`text-[10px] tabular-nums w-7 ${field.confidence >= 80 ? 'text-slate-500' : field.confidence >= 50 ? 'text-amber-400' : 'text-red-400'}`}>
-                {field.confidence}%
-              </span>
             </div>
-          </motion.div>
-        ))}
+            {/* Retry placeholder — wired up once OCR pipeline is live */}
+            <button
+              type="button"
+              disabled
+              className="flex items-center gap-1.5 text-[10px] text-indigo-400 opacity-40 cursor-not-allowed"
+            >
+              <IconRefresh className="w-3 h-3" />
+              Retry extraction
+            </button>
+          </div>
+        )}
+
+        {/* State D — success ────────────────────────────────────────────────── */}
+        {isSuccess && (
+          <div className="space-y-3">
+            {/* Metadata row */}
+            <div className="flex items-center gap-4 flex-wrap pb-3 border-b border-slate-800/60">
+              {ocrExtraction!.engine && (
+                <MetaChip label="Engine"      value={ocrExtraction!.engine} />
+              )}
+              {ocrExtraction!.confidence !== null && (
+                <MetaChip label="Confidence"  value={`${ocrExtraction!.confidence}%`} />
+              )}
+              {ocrExtraction!.processingMs !== null && (
+                <MetaChip label="Time"        value={`${ocrExtraction!.processingMs} ms`} />
+              )}
+              <MetaChip label="Extracted"   value={fmtTs(ocrExtraction!.extractedAt)} />
+            </div>
+
+            {/* Structured field rows */}
+            {ocrExtraction!.structuredData && fieldCount > 0 ? (
+              <div className="space-y-2">
+                {Object.entries(ocrExtraction!.structuredData).map(([key, val], i) => (
+                  <motion.div
+                    key={key}
+                    initial={{ opacity: 0, x: -12 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.3, delay: i * 0.05, ease: 'easeOut' }}
+                    className="flex items-center justify-between gap-4 rounded-lg border border-slate-800/60 bg-slate-800/30 px-3 py-2.5"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+                        {fmtKey(key)}
+                      </p>
+                      <p className="text-xs font-mono font-semibold mt-0.5 truncate text-slate-100">
+                        {fmtValue(val)}
+                      </p>
+                    </div>
+                  </motion.div>
+                ))}
+              </div>
+            ) : !ocrExtraction!.rawText ? (
+              /* Completed but nothing extracted at all */
+              <div className="rounded-lg border border-slate-800/60 bg-slate-800/20 px-4 py-5 text-center">
+                <p className="text-[11px] text-slate-500">
+                  No fields could be extracted from this document.
+                </p>
+              </div>
+            ) : null}
+
+            {/* Raw text — shown when structured_data is absent but raw_text exists */}
+            {!ocrExtraction!.structuredData && ocrExtraction!.rawText && (
+              <div className="rounded-lg border border-slate-700/40 bg-slate-800/20 px-3 py-3">
+                <p className="text-[9px] font-semibold uppercase tracking-widest text-slate-600 mb-2">
+                  Raw Text
+                </p>
+                <p className="text-[10px] text-slate-400 font-mono leading-relaxed whitespace-pre-wrap line-clamp-8">
+                  {ocrExtraction!.rawText}
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
       </div>
     </Card>
   )
@@ -956,13 +1318,13 @@ export function ReviewDetail({ review }: { review: ReviewDetailType }) {
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-5 items-start">
         {/* Left — sticky */}
         <div className="lg:col-span-2 space-y-4 lg:sticky lg:top-6">
-          <MockReceipt review={review} />
+          <SubmissionPreviewCard review={review} />
           <SubmissionMeta review={review} />
         </div>
 
         {/* Right — analysis + decision */}
         <div className="lg:col-span-3 space-y-4">
-          <OcrFieldsCard fields={review.ocrFields} />
+          <OcrExtractionCard ocrExtraction={review.ocrExtraction} />
           <FraudChecksCard checks={review.fraudChecks} />
           <ConfidenceCard confidence={review.confidence} riskScore={review.riskScore} />
           <ReasoningCard reasoning={review.reasoning} />

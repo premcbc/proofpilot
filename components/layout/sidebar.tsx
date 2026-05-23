@@ -170,7 +170,11 @@ export function Sidebar({ isOpen, onClose, profile }: SidebarProps) {
               <p className="text-xs font-medium text-slate-200 truncate">
                 {profile?.full_name ?? profile?.email ?? 'Account'}
               </p>
-              <p className="text-[10px] text-slate-500 truncate">Member</p>
+              <p className="text-[10px] text-slate-500 truncate capitalize">
+                {profile?.role
+                  ? `${profile.role}${profile.org_name ? ` · ${profile.org_name}` : ''}`
+                  : 'Setup required'}
+              </p>
             </div>
             <IconChevronRight className="w-3.5 h-3.5 text-slate-600 group-hover:text-slate-400 transition-colors shrink-0" />
           </div>

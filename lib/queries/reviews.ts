@@ -29,10 +29,11 @@ function timeAgo(dateStr: string): string {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function toQueueItem(r: any): ReviewQueueItem {
   const status = r.status ?? 'pending'
+  const profile = r.profiles ?? null
   return {
     id: r.review_code ?? r.id,
-    type: r.type ?? 'Upload',
-    submitter: r.submitted_by ?? '—',
+    type: r.type ?? 'other',
+    submitter: profile?.full_name ?? profile?.email ?? '—',
     riskScore: r.risk_score ?? 0,
     status: status.charAt(0).toUpperCase() + status.slice(1),
     submitted: timeAgo(r.created_at),
@@ -62,7 +63,7 @@ export async function getReviewQueue(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let dataQuery = (supabase as any)
       .from('reviews')
-      .select('id, review_code, type, submitted_by, risk_score, status, created_at')
+      .select('id, review_code, type, risk_score, status, created_at, profiles!submitted_by(full_name, email)')
       .eq('organization_id', orgId)
       .order('risk_score', { ascending: false, nullsFirst: false })
       .order('created_at', { ascending: false })

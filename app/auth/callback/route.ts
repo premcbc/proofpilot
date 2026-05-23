@@ -34,9 +34,11 @@ export async function GET(request: NextRequest) {
   if (code) {
     const { error } = await supabase.auth.exchangeCodeForSession(code)
     authError = error
+    if (error) console.error('[callback] exchangeCodeForSession error:', error.message)
   } else if (tokenHash && type) {
     const { error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type })
     authError = error
+    if (error) console.error('[callback] verifyOtp error:', error.message)
   }
 
   if (authError) {
@@ -49,7 +51,10 @@ export async function GET(request: NextRequest) {
   }
 
   const { data: { user } } = await supabase.auth.getUser()
+  console.log('[callback] user:', user?.id ?? 'none', '| email:', user?.email ?? 'none', '| confirmed_at:', user?.email_confirmed_at ?? 'none')
+
   if (!user) {
+    console.warn('[callback] no user after code exchange — redirecting to login')
     return NextResponse.redirect(new URL('/login', origin))
   }
 
@@ -58,54 +63,53 @@ export async function GET(request: NextRequest) {
     await attachInvitedMemberships(supabase, user.id, user.email)
   }
 
-  // Check for active membership — includes self-heal for pre-fix accounts
+  // Check for active membership — includes self-heal for orgs created pre-fix
   const membership = await getCurrentMembership(supabase)
+  console.log('[callback] membership:', membership ? `role=${membership.role} org=${membership.organization_id}` : 'none')
+
   if (membership) {
+    console.log('[callback] existing membership → redirecting to', next)
     return NextResponse.redirect(new URL(next, origin))
   }
 
-  // No org yet — bootstrap using metadata stored at signup, then go to dashboard.
-  // We do this here (not in /onboarding) so that:
-  //   1. The user lands in the dashboard without an extra step.
-  //   2. We use the same supabase client that already holds the new session,
-  //      avoiding any cookie-timing issues with a second createClient() call.
+  // No workspace yet — attempt to bootstrap using metadata stored at signup.
+  // Uses bootstrap_user_workspace SECURITY DEFINER RPC so it bypasses the
+  // RLS bootstrap paradox (new user has no org_members row).
   const displayName =
     (user.user_metadata?.full_name as string | undefined) ||
     (user.user_metadata?.name as string | undefined) ||
     user.email?.split('@')[0] ||
     'User'
-  const orgName =
-    (user.user_metadata?.org_name as string | undefined) ||
-    displayName
 
-  const slug = (user.email?.split('@')[0] ?? 'org')
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '-')
+  const orgName = (user.user_metadata?.org_name as string | undefined) || ''
+  // Prefer slug from metadata (set at signup); fall back to email-derived slug.
+  const metaSlug = (user.user_metadata?.org_slug as string | undefined) || ''
+  const fallbackSlug = (user.email?.split('@')[0] ?? 'org').toLowerCase().replace(/[^a-z0-9]/g, '-')
+  const slug = metaSlug || fallbackSlug
 
-  const { data: orgId, error: orgError } = await supabase.rpc('create_organization', {
-    org_name: orgName,
-    org_slug: `${slug}-${Date.now().toString(36)}`,
-  }) as { data: string | null; error: { message: string } | null }
+  console.log('[callback] org_name from metadata:', orgName || '(none)', '| slug:', slug)
 
-  if (orgId && !orgError) {
-    const now = new Date().toISOString()
+  if (orgName) {
+    // Password signup path: org name was captured at signup and stored in metadata.
+    // Only bootstrap if this is a real confirmed user (email_confirmed_at is set
+    // after exchangeCodeForSession completes — the confirmation link IS the exchange).
+    const { data: orgId, error: rpcError } = await supabase.rpc('bootstrap_user_workspace', {
+      p_org_name: orgName,
+      p_org_slug: `${slug}-${Date.now().toString(36)}`,
+      p_full_name: displayName,
+    }) as { data: string | null; error: { message: string } | null }
 
-    // Profile must exist before org_members insert (user_id FK → profiles.id)
-    await supabase.from('profiles').upsert(
-      { id: user.id, email: user.email ?? '', full_name: displayName },
-      { onConflict: 'id' }
-    )
+    console.log('[callback] bootstrap_user_workspace result:', orgId ?? 'null', 'error:', rpcError?.message ?? 'none')
 
-    await supabase
-      .from('organization_members')
-      .upsert(
-        { organization_id: orgId, user_id: user.id, role: 'owner', status: 'active', accepted_at: now },
-        { onConflict: 'organization_id,user_id', ignoreDuplicates: false }
-      )
+    if (orgId && !rpcError) {
+      console.log('[callback] workspace created, org_id:', orgId, '→ redirecting to', next)
+      return NextResponse.redirect(new URL(next, origin))
+    }
 
-    return NextResponse.redirect(new URL(next, origin))
+    console.error('[callback] bootstrap RPC failed:', rpcError?.message ?? 'unknown')
   }
 
-  // Bootstrap failed — fall back to manual onboarding
+  // OAuth or missing metadata → show onboarding form for manual org creation
+  console.log('[callback] no org_name in metadata → redirecting to /onboarding')
   return NextResponse.redirect(new URL('/onboarding', origin))
 }
