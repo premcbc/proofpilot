@@ -23,7 +23,8 @@
       "Bash(Write-Host \"Done\")",
       "Bash(Get-ChildItem \"C:\\\\Users\\\\ADMIN\\\\Downloads\\\\proofpilot\\\\components\" -Recurse -Name)",
       "Bash(Get-ChildItem \"C:\\\\Users\\\\ADMIN\\\\Downloads\\\\proofpilot\\\\lib\" -Recurse -Name)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(node -e \"require\\('sharp'\\); console.log\\('sharp ok, version:', require\\('sharp/package.json'\\).version\\)\")"
     ],
     "additionalDirectories": [
       "c:\\Users\\ADMIN\\Downloads\\proofpilot\\app\\reviews",

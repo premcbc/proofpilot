@@ -2,7 +2,9 @@ import { notFound } from 'next/navigation'
 import { REVIEWS } from '@/lib/review-data'
 import { ReviewDetail } from '@/components/review/review-detail'
 import { createClient, getCurrentOrgId } from '@/lib/supabase/server'
-import type { ReviewDetail as ReviewDetailType, AuditEntry, ReviewFraudCheck, OcrExtraction, OcrExtractionStatus } from '@/lib/review-data'
+import type { ReviewDetail as ReviewDetailType, AuditEntry, ReviewFraudCheck, OcrExtraction, OcrExtractionStatus, OcrHistoryItem, OcrJobSummary, OcrJobStatus } from '@/lib/review-data'
+import { parseOcrStructuredData } from '@/lib/review-data'
+import type { FraudAnalysisSummary, FraudSignalView, FraudSeverity } from '@/lib/fraud/types'
 
 async function loadRealReview(reviewCode: string): Promise<ReviewDetailType | null> {
   try {
@@ -20,8 +22,8 @@ async function loadRealReview(reviewCode: string): Promise<ReviewDetailType | nu
 
     if (error || !review) return null
 
-    const [ocrRes, fraudRes, auditRes, fileRes] = await Promise.all([
-      // Fetch the most-recent OCR extraction row only.
+    const [ocrRes, ocrHistoryRes, ocrJobRes, fraudRes, auditRes, fileRes] = await Promise.all([
+      // Latest OCR extraction row — used for the OCR Extraction card.
       // ascending: false + limit 1 + maybeSingle → single object or null.
       supabase
         .from('ocr_extractions')
@@ -31,9 +33,29 @@ async function loadRealReview(reviewCode: string): Promise<ReviewDetailType | nu
         .limit(1)
         .maybeSingle(),
 
+      // Full OCR history — up to 10 rows, newest-first.
+      // Used to build the immutable OCR timeline (buildOcrTimeline).
+      // Each run creates a new row (INSERT, not UPSERT) so history is preserved.
+      supabase
+        .from('ocr_extractions')
+        .select('id, engine, status, confidence, processing_ms, structured_data, error_message, created_at')
+        .eq('review_id', review.id)
+        .order('created_at', { ascending: false })
+        .limit(10),
+
+      // Latest OCR job — used to show queue state (pending/processing) in the UI
+      // before any extraction row exists.  Null when no job has ever been enqueued.
+      supabase
+        .from('ocr_jobs')
+        .select('id, review_id, status, attempts, created_at, started_at')
+        .eq('review_id', review.id)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+
       supabase
         .from('fraud_signals')
-        .select('id, signal_type, severity, description, confidence, resolved, created_at')
+        .select('id, signal_type, severity, description, confidence, metadata, resolved, created_at')
         .eq('review_id', review.id)
         .order('created_at', { ascending: true }),
 
@@ -44,7 +66,7 @@ async function loadRealReview(reviewCode: string): Promise<ReviewDetailType | nu
         .eq('entity_id', review.id)
         .order('created_at', { ascending: true }),
 
-      // Fetch the first uploaded file for this review so we can generate a signed URL.
+      // First uploaded file — used to generate a signed URL for the preview card.
       supabase
         .from('review_files')
         .select('storage_path, mime_type, file_name, size_bytes')
@@ -126,10 +148,7 @@ async function loadRealReview(reviewCode: string): Promise<ReviewDetailType | nu
         ? (ocrRow.status as OcrExtractionStatus)
         : 'completed' // rows that pre-date the status column are assumed complete
 
-      const structuredData: Record<string, unknown> | null =
-        ocrRow.structured_data && typeof ocrRow.structured_data === 'object' && !Array.isArray(ocrRow.structured_data)
-          ? (ocrRow.structured_data as Record<string, unknown>)
-          : null
+      const structuredData = parseOcrStructuredData(ocrRow.structured_data)
 
       ocrExtraction = {
         engine:       ocrRow.engine     ?? null,
@@ -142,30 +161,139 @@ async function loadRealReview(reviewCode: string): Promise<ReviewDetailType | nu
       }
 
       const renderPath =
-        status === 'completed' && structuredData && Object.keys(structuredData).length > 0
-          ? 'structured-fields'
+        status === 'completed' && structuredData
+          ? `structured:${structuredData.document_type}`
           : status === 'completed' && ocrRow.raw_text
           ? 'raw-text'
           : status
 
       console.log('[loadRealReview] OCR status:', status,
-        '| structured keys:', structuredData ? Object.keys(structuredData) : [],
+        '| document_type:', structuredData?.document_type ?? 'null',
+        '| quality_score:', structuredData?.extraction_quality_score ?? 'null',
         '| render path:', renderPath,
         '| engine:', ocrExtraction.engine ?? 'unknown')
+    }
+
+    // ── Build OCR history (up to 10 rows) ────────────────────────────────────
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ocrHistoryRows = (ocrHistoryRes.data ?? []) as any[]
+    const VALID_STATUSES_H: OcrExtractionStatus[] = ['pending', 'processing', 'completed', 'failed']
+
+    const ocrHistory: OcrHistoryItem[] = ocrHistoryRows.map(row => {
+      const parsed = parseOcrStructuredData(row.structured_data)
+      const status: OcrExtractionStatus = VALID_STATUSES_H.includes(row.status)
+        ? (row.status as OcrExtractionStatus)
+        : 'completed'
+      return {
+        id:              row.id            as string,
+        engine:          row.engine        ?? null,
+        status,
+        confidence:      typeof row.confidence    === 'number' ? row.confidence    : null,
+        processingMs:    typeof row.processing_ms === 'number' ? row.processing_ms : null,
+        documentType:    parsed?.document_type    ?? null,
+        qualityScore:    parsed?.extraction_quality_score ?? null,
+        suspiciousCount: parsed?.suspicious_indicators?.length ?? 0,
+        missingCount:    parsed?.missing_fields?.length        ?? 0,
+        createdAt:       row.created_at    as string,
+        errorMessage:    row.error_message ?? null,
+      }
+    })
+
+    console.log('[loadRealReview] OCR history loaded',
+      '| runs:', ocrHistory.length,
+      '| statuses:', ocrHistory.map(h => h.status).join(', '))
+
+    // ── Build OcrJobSummary from the latest ocr_jobs row ─────────────────────
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ocrJobRow = ocrJobRes.data as any
+    const VALID_JOB_STATUSES: OcrJobStatus[] = ['pending', 'processing', 'completed', 'failed']
+
+    let latestOcrJob: OcrJobSummary | null = null
+    if (ocrJobRow) {
+      const jobStatus: OcrJobStatus = VALID_JOB_STATUSES.includes(ocrJobRow.status)
+        ? (ocrJobRow.status as OcrJobStatus)
+        : 'pending'
+      latestOcrJob = {
+        id:        ocrJobRow.id        as string,
+        reviewId:  ocrJobRow.review_id as string,
+        status:    jobStatus,
+        attempts:  typeof ocrJobRow.attempts === 'number' ? ocrJobRow.attempts : 0,
+        createdAt: ocrJobRow.created_at as string,
+        startedAt: ocrJobRow.started_at ?? null,
+      }
+      console.log('[loadRealReview] latest OCR job',
+        '| jobId:', latestOcrJob.id,
+        '| status:', latestOcrJob.status,
+        '| attempts:', latestOcrJob.attempts)
+    } else {
+      console.log('[loadRealReview] no OCR jobs found for review:', review.id)
     }
 
     // ocrFields kept as empty array — OcrExtractionCard uses ocrExtraction directly.
     // MockReceiptInner (demo fallback) still reads review.ocrFields from static REVIEWS data.
     const ocrFields: [] = []
 
+    // ── Build FraudAnalysisSummary from fraud_signals rows ───────────────────
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const fraudChecks: ReviewFraudCheck[] = (fraudRes.data ?? []).map((s: any) => ({
+    const fraudRows = (fraudRes.data ?? []) as any[]
+    const VALID_SEVERITIES: FraudSeverity[] = ['low', 'medium', 'high', 'critical']
+
+    const fraudSignalViews: FraudSignalView[] = fraudRows.map(s => {
+      const severity: FraudSeverity = VALID_SEVERITIES.includes(s.severity)
+        ? (s.severity as FraudSeverity)
+        : 'low'
+      // title stored in metadata.title by storeFraudSignals; fall back to signal_type
+      const meta = (typeof s.metadata === 'object' && s.metadata !== null)
+        ? (s.metadata as Record<string, unknown>)
+        : {}
+      const title = typeof meta.title === 'string' && meta.title
+        ? meta.title
+        : (s.signal_type as string ?? '—').replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())
+      return {
+        id:          s.id            as string,
+        signalType:  s.signal_type   as string,
+        severity,
+        confidence:  typeof s.confidence === 'number' ? s.confidence : 0,
+        title,
+        description: s.description   as string ?? '—',
+        createdAt:   s.created_at    as string,
+      }
+    })
+
+    // Sort signals: critical → high → medium → low
+    const SEV_ORDER: Record<FraudSeverity, number> = { critical: 0, high: 1, medium: 2, low: 3 }
+    fraudSignalViews.sort((a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity])
+
+    // risk_score / risk_level live on the review row (updated by storeFraudSignals pipeline)
+    const dbRiskScore = typeof review.risk_score === 'number' ? review.risk_score : 0
+    const dbRiskLevel: FraudSeverity = VALID_SEVERITIES.includes(review.risk_level)
+      ? (review.risk_level as FraudSeverity)
+      : 'low'
+    const latestSignalAt = fraudRows.length > 0
+      ? fraudRows[fraudRows.length - 1].created_at as string
+      : null
+
+    const fraudAnalysis: FraudAnalysisSummary | null = fraudRows.length > 0 || dbRiskScore > 0
+      ? {
+          riskScore:   dbRiskScore,
+          riskLevel:   dbRiskLevel,
+          signalCount: fraudSignalViews.length,
+          signals:     fraudSignalViews,
+          generatedAt: latestSignalAt,
+        }
+      : null
+
+    console.log('[loadRealReview] fraud analysis',
+      '| signals:', fraudSignalViews.length,
+      '| riskScore:', dbRiskScore,
+      '| riskLevel:', dbRiskLevel)
+
+    // fraudChecks: legacy shape used by the static FraudChecksCard (demo fallback)
+    const fraudChecks: ReviewFraudCheck[] = fraudRows.map(s => ({
       label: s.signal_type ?? '—',
       detail: s.description ?? '—',
       passed: s.resolved === true || s.severity === 'low',
-      severity: (['low', 'medium', 'high', 'critical'].includes(s.severity)
-        ? s.severity
-        : 'low') as ReviewFraudCheck['severity'],
+      severity: (VALID_SEVERITIES.includes(s.severity) ? s.severity : 'low') as ReviewFraudCheck['severity'],
     }))
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -219,6 +347,10 @@ async function loadRealReview(reviewCode: string): Promise<ReviewDetailType | nu
       fileMimeType,
       fileName,
       ocrExtraction,
+      reviewDbId: review.id,
+      ocrHistory,
+      latestOcrJob,
+      fraudAnalysis,
     }
   } catch {
     return null

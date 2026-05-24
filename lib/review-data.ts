@@ -1,3 +1,5 @@
+export type { FraudSeverity, FraudSignalType, FraudSignalInput, FraudSignalView, FraudAnalysisSummary } from '@/lib/fraud/types'
+
 export type ReviewStatus = 'pending' | 'flagged' | 'approved' | 'rejected'
 export type SlaStatus = 'on-track' | 'at-risk' | 'breached'
 export type AuditActorType = 'system' | 'ai' | 'human'
@@ -11,26 +13,336 @@ export interface ReviewOcrField {
 
 // ── OCR Extraction ─────────────────────────────────────────────────────────────
 // Represents one row from public.ocr_extractions (latest row per review).
-// The renderer is intentionally generic — structured_data keys vary by document
-// type (invoice, screenshot, receipt, etc.) and are never hardcoded.
+// The renderer is intentionally generic — document_type and document_specific_data
+// keys vary by file type (invoice, receipt, sportsbook_screenshot, etc.) and are
+// never hardcoded into the UI.
 
 export type OcrExtractionStatus = 'pending' | 'processing' | 'completed' | 'failed'
+
+// ── Universal structured-data schema ─────────────────────────────────────────
+
+/** Atomic entities found in any document, regardless of type. */
+export interface GenericEntities {
+  dates:         string[]
+  amounts:       string[]
+  emails:        string[]
+  phones:        string[]
+  websites:      string[]
+  names:         string[]
+  organizations: string[]
+}
+
+/** A single suspicious signal reported by the AI (free-form description). */
+export type SuspiciousIndicator = string
+
+/**
+ * Type-specific fields keyed by snake_case identifiers.
+ * Values are always strings (or null if the field was not visible).
+ */
+export type DocumentSpecificData = Record<string, string | null>
+
+/**
+ * Full schema stored in ocr_extractions.structured_data.
+ * All array fields are always present (empty array when nothing found).
+ */
+export interface OcrStructuredData {
+  /** e.g. "invoice" | "receipt" | "sportsbook_screenshot" | "betting_slip" | "id_card" | "bank_statement" | "mixed" | "unknown" */
+  document_type:            string
+  /** AI-reported OCR text confidence (0–100). */
+  ocr_confidence:           number
+  /** Entities found across all document types. */
+  generic_entities:         GenericEntities | null
+  /** Fields specific to the detected document_type. */
+  document_specific_data:   DocumentSpecificData | null
+  /** Critical fields for this document type that could not be read. */
+  missing_fields:           string[]
+  /** Short notes explaining OCR uncertainty at specific regions. */
+  confidence_notes:         string[]
+  /** Free-form descriptions of suspicious elements detected by the AI. */
+  suspicious_indicators:    SuspiciousIndicator[]
+  /** Overall extraction quality 0–100 (computed from multiple factors). */
+  extraction_quality_score: number
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function isStringArray(v: unknown): v is string[] {
+  return Array.isArray(v) && v.every(item => typeof item === 'string')
+}
+
+function parseGenericEntities(raw: unknown): GenericEntities | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const r = raw as Record<string, unknown>
+  const safeArr = (v: unknown): string[] => isStringArray(v) ? v : []
+  return {
+    dates:         safeArr(r.dates),
+    amounts:       safeArr(r.amounts),
+    emails:        safeArr(r.emails),
+    phones:        safeArr(r.phones),
+    websites:      safeArr(r.websites),
+    names:         safeArr(r.names),
+    organizations: safeArr(r.organizations),
+  }
+}
+
+function parseDocumentSpecificData(raw: unknown): DocumentSpecificData | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const r    = raw as Record<string, unknown>
+  const out: DocumentSpecificData = {}
+  for (const [k, v] of Object.entries(r)) {
+    out[k] = typeof v === 'string' ? v : v === null ? null : String(v)
+  }
+  return Object.keys(out).length > 0 ? out : null
+}
+
+/**
+ * Safely parse an unknown value (e.g. from `ocr_extractions.structured_data`)
+ * into a typed `OcrStructuredData`.  Returns null for malformed or absent data.
+ * Uses only `unknown` + type guards — no `any`.
+ */
+/**
+ * Compute an objective extraction quality score (0–100) from structural signals.
+ * Overrides the AI's self-reported extraction_quality_score before storing to DB.
+ *
+ * Factors: OCR confidence, suspicious indicator count, missing field count,
+ * and completeness of document-specific data.
+ */
+export function computeExtractionQualityScore(data: OcrStructuredData): number {
+  // Base: AI-reported OCR text confidence
+  let score = data.ocr_confidence
+
+  // Deduct for suspicious indicators (10 pts each, capped at −30)
+  score -= Math.min(data.suspicious_indicators.length * 10, 30)
+
+  // Deduct for missing critical fields (5 pts each, capped at −20)
+  score -= Math.min(data.missing_fields.length * 5, 20)
+
+  // Completeness bonus: non-null values in document_specific_data (2 pts each, max +10)
+  const nonNullSpecific = data.document_specific_data
+    ? Object.values(data.document_specific_data).filter(v => v !== null).length
+    : 0
+  score += Math.min(nonNullSpecific * 2, 10)
+
+  return Math.max(0, Math.min(100, Math.round(score)))
+}
+
+export function parseOcrStructuredData(raw: unknown): OcrStructuredData | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const r = raw as Record<string, unknown>
+
+  const document_type = typeof r.document_type === 'string' ? r.document_type : 'unknown'
+
+  const ocr_confidence = typeof r.ocr_confidence === 'number'
+    ? Math.max(0, Math.min(100, Math.round(r.ocr_confidence)))
+    : 0
+
+  const extraction_quality_score = typeof r.extraction_quality_score === 'number'
+    ? Math.max(0, Math.min(100, Math.round(r.extraction_quality_score)))
+    : 0
+
+  return {
+    document_type,
+    ocr_confidence,
+    generic_entities:       parseGenericEntities(r.generic_entities),
+    document_specific_data: parseDocumentSpecificData(r.document_specific_data),
+    missing_fields:         isStringArray(r.missing_fields)        ? r.missing_fields        : [],
+    confidence_notes:       isStringArray(r.confidence_notes)      ? r.confidence_notes      : [],
+    suspicious_indicators:  isStringArray(r.suspicious_indicators) ? r.suspicious_indicators : [],
+    extraction_quality_score,
+  }
+}
 
 export interface OcrExtraction {
   /** OCR engine identifier (e.g. 'openai-gpt4o', 'google-vision', 'tesseract') */
   engine: string | null
   /** Processing state tracked in the DB */
   status: OcrExtractionStatus
-  /** Arbitrary key/value pairs — keys vary by document type, never hardcoded */
-  structuredData: Record<string, unknown> | null
+  /** Parsed structured extraction — null when absent or malformed */
+  structuredData: OcrStructuredData | null
   /** Full raw text from the OCR pass, if stored */
   rawText: string | null
-  /** Engine-reported confidence score 0–100 */
+  /** Engine-reported OCR confidence score 0–100 */
   confidence: number | null
   /** Wall-clock processing time in milliseconds */
   processingMs: number | null
   /** ISO 8601 timestamp of the extraction row */
   extractedAt: string
+}
+
+// ── OCR Job Queue ─────────────────────────────────────────────────────────────
+
+/** Four-state lifecycle of an ocr_jobs row. */
+export type OcrJobStatus = 'pending' | 'processing' | 'completed' | 'failed'
+
+/**
+ * Minimal projection of an ocr_jobs row used for UI state derivation.
+ * The full row lives in the DB; only these fields travel to the client.
+ */
+export interface OcrJobSummary {
+  /** ocr_jobs.id (UUID) */
+  id:        string
+  /** FK to reviews.id — needed by the worker to call runReviewOCR(reviewId) */
+  reviewId:  string
+  status:    OcrJobStatus
+  /** Total attempt count (incremented on each worker claim). */
+  attempts:  number
+  createdAt: string
+  startedAt: string | null
+}
+
+// ── OCR History & Timeline ────────────────────────────────────────────────────
+
+/** Discriminated event type driving icon + colour selection in the timeline. */
+export type OcrTimelineEventType =
+  | 'ocr_triggered'
+  | 'ocr_completed'
+  | 'ocr_failed'
+  | 'document_classified'
+  | 'suspicious_detected'
+  | 'quality_scored'
+  | 'raw_text_only'
+
+/**
+ * Traffic-light status for each timeline dot.
+ * success = green, warning = yellow, failed = red, processing = blue, info = slate.
+ */
+export type OcrTimelineStatus = 'success' | 'warning' | 'failed' | 'processing' | 'info'
+
+/** A single event in the OCR execution timeline. */
+export interface OcrTimelineEvent {
+  /** Stable key for React lists. */
+  id:        string
+  type:      OcrTimelineEventType
+  status:    OcrTimelineStatus
+  /** Short human-readable label shown on the timeline row. */
+  label:     string
+  /** Optional supporting detail (engine name, ms, missing-field count, etc.). */
+  detail:    string | null
+  /** ISO 8601 — used for display via fmtTs; not a guaranteed unique clock. */
+  timestamp: string
+}
+
+/**
+ * One row from public.ocr_extractions, normalised for the history list / timeline.
+ * Structured-data sub-fields are extracted to avoid passing the full blob around.
+ */
+export interface OcrHistoryItem {
+  /** ocr_extractions.id (UUID). */
+  id:              string
+  engine:          string | null
+  status:          OcrExtractionStatus
+  confidence:      number | null
+  processingMs:    number | null
+  /** structured_data.document_type — null when parsing failed or row is failed. */
+  documentType:    string | null
+  /** structured_data.extraction_quality_score — null when parsing failed. */
+  qualityScore:    number | null
+  /** structured_data.suspicious_indicators.length */
+  suspiciousCount: number
+  /** structured_data.missing_fields.length */
+  missingCount:    number
+  /** ISO 8601 row creation timestamp. */
+  createdAt:       string
+  /** error_message stored for failed rows. */
+  errorMessage:    string | null
+}
+
+/**
+ * Derive a chronological `OcrTimelineEvent[]` from the full extraction history.
+ * Suitable for both the server and client — pure data transformation, no side effects.
+ */
+export function buildOcrTimeline(history: OcrHistoryItem[]): OcrTimelineEvent[] {
+  if (history.length === 0) return []
+
+  // Process oldest-first so the timeline reads top → bottom chronologically
+  const sorted    = [...history].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  const multiRun  = history.length > 1
+  const events: OcrTimelineEvent[] = []
+
+  const fmtType = (t: string) =>
+    t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+
+  sorted.forEach((item, idx) => {
+    const runSuffix = multiRun ? ` (Run ${idx + 1})` : ''
+
+    // ── Triggered ──────────────────────────────────────────────────────────────
+    events.push({
+      id:        `${item.id}-triggered`,
+      type:      'ocr_triggered',
+      status:    'processing',
+      label:     `OCR Triggered${runSuffix}`,
+      detail:    item.engine ? `Engine: ${item.engine}` : null,
+      timestamp: item.createdAt,
+    })
+
+    if (item.status === 'failed') {
+      events.push({
+        id:        `${item.id}-failed`,
+        type:      'ocr_failed',
+        status:    'failed',
+        label:     `Extraction Failed${runSuffix}`,
+        detail:    item.errorMessage ?? 'The OCR engine encountered an error.',
+        timestamp: item.createdAt,
+      })
+      return // forEach does not support break; return skips this iteration
+    }
+
+    if (item.status !== 'completed') return
+
+    // ── Document classified ────────────────────────────────────────────────────
+    if (item.documentType && item.documentType !== 'unknown') {
+      events.push({
+        id:        `${item.id}-classified`,
+        type:      'document_classified',
+        status:    'success',
+        label:     `Document Classified: ${fmtType(item.documentType)}`,
+        detail:    null,
+        timestamp: item.createdAt,
+      })
+    }
+
+    // ── Suspicious indicators ──────────────────────────────────────────────────
+    if (item.suspiciousCount > 0) {
+      events.push({
+        id:        `${item.id}-suspicious`,
+        type:      'suspicious_detected',
+        status:    'warning',
+        label:     `${item.suspiciousCount} Suspicious Indicator${item.suspiciousCount !== 1 ? 's' : ''} Detected`,
+        detail:    null,
+        timestamp: item.createdAt,
+      })
+    }
+
+    // ── Quality score ──────────────────────────────────────────────────────────
+    if (item.qualityScore !== null) {
+      const tier   = item.qualityScore >= 71 ? 'Strong' : item.qualityScore >= 41 ? 'Moderate' : 'Poor'
+      const qstatus: OcrTimelineStatus =
+        item.qualityScore >= 71 ? 'success' :
+        item.qualityScore >= 41 ? 'warning'  : 'failed'
+      events.push({
+        id:        `${item.id}-quality`,
+        type:      'quality_scored',
+        status:    qstatus,
+        label:     `Quality Score: ${item.qualityScore}/100 (${tier})`,
+        detail:    item.missingCount > 0
+          ? `${item.missingCount} critical field${item.missingCount !== 1 ? 's' : ''} missing`
+          : null,
+        timestamp: item.createdAt,
+      })
+    }
+
+    // ── Completed ──────────────────────────────────────────────────────────────
+    events.push({
+      id:        `${item.id}-completed`,
+      type:      'ocr_completed',
+      status:    'success',
+      label:     `Extraction Complete${runSuffix}`,
+      detail:    item.processingMs !== null ? `${item.processingMs} ms` : null,
+      timestamp: item.createdAt,
+    })
+  })
+
+  return events
 }
 
 export interface ReviewFraudCheck {
@@ -85,6 +397,31 @@ export interface ReviewDetail {
    * OcrExtraction = extraction data present.
    */
   ocrExtraction?: OcrExtraction | null
+  /**
+   * Supabase row UUID (reviews.id).  Distinct from `id` which is the human-readable
+   * review_code (e.g. "REV-1A2B3C").  Required to call runReviewOCR.
+   * Undefined for demo/static reviews that have no DB row.
+   */
+  reviewDbId?: string
+  /**
+   * Up to 10 most-recent OCR extraction rows, newest-first.
+   * Used to build the OCR timeline card via buildOcrTimeline().
+   * Undefined for demo/static reviews that have no DB row.
+   */
+  ocrHistory?: OcrHistoryItem[]
+  /**
+   * Most-recent ocr_jobs row for this review.
+   * Drives the "Queued" and "Processing" UI states that appear before any
+   * ocr_extractions row exists.
+   * Undefined for demo/static reviews.  Null when no job has been enqueued yet.
+   */
+  latestOcrJob?: OcrJobSummary | null
+  /**
+   * Aggregated fraud analysis: risk score, risk level, and all fraud signals
+   * generated from the latest OCR extraction.
+   * Undefined for demo/static reviews.  Null when no signals exist yet.
+   */
+  fraudAnalysis?: import('@/lib/fraud/types').FraudAnalysisSummary | null
 }
 
 export const REVIEWS: Record<string, ReviewDetail> = {

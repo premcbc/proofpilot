@@ -238,6 +238,8 @@ export interface Database {
           review_id: string
           bucket: string
           storage_path: string
+          /** Sharp-optimised JPEG path used by OCR. NULL → OCR falls back to storage_path. */
+          ocr_storage_path: string | null
           file_name: string
           mime_type: string | null
           size_bytes: number | null
@@ -253,6 +255,7 @@ export interface Database {
           review_id: string
           bucket?: string
           storage_path: string
+          ocr_storage_path?: string | null
           file_name: string
           mime_type?: string | null
           size_bytes?: number | null
@@ -268,6 +271,7 @@ export interface Database {
           review_id?: string
           bucket?: string
           storage_path?: string
+          ocr_storage_path?: string | null
           file_name?: string
           mime_type?: string | null
           size_bytes?: number | null
@@ -483,6 +487,10 @@ export interface Database {
           structured_data: Json
           confidence: number | null
           processing_ms: number | null
+          /** pending | processing | completed | failed — added by migration 20260525 */
+          status: string
+          /** Populated when status = 'failed' — added by migration 20260525 */
+          error_message: string | null
           created_at: string
           updated_at: string
         }
@@ -498,6 +506,8 @@ export interface Database {
           structured_data?: Json
           confidence?: number | null
           processing_ms?: number | null
+          status?: string
+          error_message?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -513,8 +523,52 @@ export interface Database {
           structured_data?: Json
           confidence?: number | null
           processing_ms?: number | null
+          status?: string
+          error_message?: string | null
           created_at?: string
           updated_at?: string
+        }
+      }
+      ocr_jobs: {
+        Row: {
+          id:              string
+          organization_id: string
+          review_id:       string
+          /** pending | processing | completed | failed */
+          status:          string
+          attempts:        number
+          max_attempts:    number
+          priority:        number
+          error_message:   string | null
+          created_at:      string
+          started_at:      string | null
+          completed_at:    string | null
+        }
+        Insert: {
+          id?:             string
+          organization_id: string
+          review_id:       string
+          status?:         string
+          attempts?:       number
+          max_attempts?:   number
+          priority?:       number
+          error_message?:  string | null
+          created_at?:     string
+          started_at?:     string | null
+          completed_at?:   string | null
+        }
+        Update: {
+          id?:             string
+          organization_id?: string
+          review_id?:      string
+          status?:         string
+          attempts?:       number
+          max_attempts?:   number
+          priority?:       number
+          error_message?:  string | null
+          created_at?:     string
+          started_at?:     string | null
+          completed_at?:   string | null
         }
       }
       fraud_signals: {
@@ -815,6 +869,7 @@ export type ReviewComment = Database['public']['Tables']['review_comments']['Row
 export type OrganizationMember = Database['public']['Tables']['organization_members']['Row']
 export type AiAnalysis = Database['public']['Tables']['ai_analysis']['Row']
 export type OcrExtraction = Database['public']['Tables']['ocr_extractions']['Row']
+export type OcrJob        = Database['public']['Tables']['ocr_jobs']['Row']
 export type FraudSignal = Database['public']['Tables']['fraud_signals']['Row']
 export type FraudAlert = Database['public']['Tables']['fraud_alerts']['Row']
 export type AuditLog = Database['public']['Tables']['audit_logs']['Row']

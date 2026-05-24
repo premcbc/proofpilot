@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { getCurrentMembership, canReview } from '@/lib/supabase/org'
+import { optimizeImageForOcr, isOptimizableMimeType } from '@/lib/actions/image-optimizer'
 
 export type UploadState = { error: string } | { reviewCode: string } | null
 
@@ -111,11 +112,14 @@ export async function createReviewWithFile(
 
   console.log('[createReview] review created:', review.id, '| code:', review.review_code)
 
-  // ── Step 3: Upload file to storage ────────────────────────────────────────
-  const storagePath = `organizations/${orgId}/reviews/${review.id}/${Date.now()}-${file.name}`
+  // ── Step 3: Upload original file to storage ──────────────────────────────
+  // Originals go into /original/ so the /ocr/ sibling can live alongside them.
+  const storagePath = `organizations/${orgId}/reviews/${review.id}/original/${Date.now()}-${file.name}`
   const bytes = await file.arrayBuffer()
 
-  console.log('[createReview] uploading to storage path:', storagePath, '| size:', file.size)
+  console.log('[createReview] uploading original to storage path:', storagePath,
+    '| size:', file.size, 'bytes',
+    '| mime:', file.type)
 
   const { error: uploadError } = await supabase.storage
     .from('review-files')
@@ -129,19 +133,65 @@ export async function createReviewWithFile(
     return { error: `File upload failed: ${uploadError.message}` }
   }
 
-  console.log('[createReview] file uploaded successfully')
+  console.log('[createReview] original file uploaded successfully')
+
+  // ── Step 3b: Generate OCR-optimised image ─────────────────────────────────
+  // Non-fatal: any failure here is caught and logged; OCR falls back to the
+  // original storage_path when ocr_storage_path is null.
+  let ocrStoragePath: string | null = null
+
+  if (isOptimizableMimeType(file.type)) {
+    const ocrPath = `organizations/${orgId}/reviews/${review.id}/ocr/${Date.now()}.jpg`
+
+    try {
+      console.log('[createReview] step 3b — optimising image for OCR',
+        '| inputSize:', file.size, 'bytes',
+        '| mime:', file.type,
+        '| targetPath:', ocrPath)
+
+      const inputBuffer = Buffer.from(bytes)
+      const optimized   = await optimizeImageForOcr(inputBuffer)
+
+      console.log('[createReview] OCR optimisation complete',
+        '| originalBytes:', optimized.originalBytes,
+        '| optimizedBytes:', optimized.optimizedBytes,
+        '| compressionPct:', `${optimized.compressionPct}%`,
+        '| outputDims:', `${optimized.outputWidth}×${optimized.outputHeight}`)
+
+      const { error: ocrUploadError } = await supabase.storage
+        .from('review-files')
+        .upload(ocrPath, optimized.buffer, { contentType: 'image/jpeg', upsert: false })
+
+      if (ocrUploadError) {
+        console.error('[createReview] OCR image upload failed (non-fatal):',
+          ocrUploadError.message, '— OCR will fall back to original')
+      } else {
+        ocrStoragePath = ocrPath
+        console.log('[createReview] OCR image uploaded | path:', ocrPath)
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error('[createReview] image optimisation failed (non-fatal):',
+        msg, '— OCR will fall back to original')
+      // ocrStoragePath stays null → OCR pipeline uses storage_path
+    }
+  } else {
+    console.log('[createReview] skipping OCR optimisation — non-image type:', file.type,
+      '— OCR will use original directly')
+  }
 
   // ── Step 4: Insert review_files metadata row ──────────────────────────────
   // uploaded_by matches the review_files schema (not submitted_by)
   const filePayload = {
-    organization_id: orgId,
-    review_id:       review.id,
-    bucket:          'review-files',
-    storage_path:    storagePath,
-    file_name:       file.name,
-    mime_type:       file.type,
-    size_bytes:      file.size,
-    uploaded_by:     user.id,
+    organization_id:  orgId,
+    review_id:        review.id,
+    bucket:           'review-files',
+    storage_path:     storagePath,
+    ocr_storage_path: ocrStoragePath,
+    file_name:        file.name,
+    mime_type:        file.type,
+    size_bytes:       file.size,
+    uploaded_by:      user.id,
   }
 
   console.log('[createReview] inserting review_files row for review:', review.id)

@@ -1,14 +1,22 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useTransition } from 'react'
+import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { triggerReviewOCR } from '@/app/actions/run-ocr'
 import { motion, AnimatePresence, useMotionValue, animate } from 'framer-motion'
 import {
   type ReviewDetail as ReviewDetailType,
   type AuditEntry,
   type ReviewFraudCheck,
   type OcrExtraction,
+  type OcrStructuredData,
+  type OcrHistoryItem,
+  type OcrJobSummary,
+  type OcrTimelineStatus,
+  buildOcrTimeline,
 } from '@/lib/review-data'
+import type { FraudAnalysisSummary, FraudSignalView, FraudSeverity } from '@/lib/fraud/types'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { StatusBadge } from '@/components/ui/badge'
@@ -386,8 +394,10 @@ function SubmissionMeta({ review }: { review: ReviewDetailType }) {
 
 // ─── OCR Extraction card ──────────────────────────────────────────────────────
 //
-// Generic renderer — supports any document type (invoice, screenshot, receipt, etc.)
-// without hardcoding field names.  Handles 4 states: no-data, processing, failed, success.
+// Supports any document type via the universal OcrStructuredData schema.
+// Handles 4 states: no-data, processing, failed, success.
+// Success state renders 7 sections: Classification, Quality, Entities,
+// Document Fields, AI Warnings, Missing Fields, Confidence Notes.
 
 /** snake_case / camelCase / PascalCase → Title Case */
 function fmtKey(k: string): string {
@@ -399,10 +409,172 @@ function fmtKey(k: string): string {
     .join(' ')
 }
 
-function fmtValue(v: unknown): string {
-  if (v === null || v === undefined) return '—'
-  if (typeof v === 'object') return JSON.stringify(v)
-  return String(v)
+
+/** "sportsbook_screenshot" → "Sportsbook Screenshot" */
+function fmtDocType(t: string): string {
+  return t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+}
+
+/** Extraction quality tier label + colour classes. */
+function qualityBadge(score: number): { label: string; cls: string; barColor: string } {
+  if (score >= 71) return { label: 'Strong',   cls: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20', barColor: '#34d399' }
+  if (score >= 41) return { label: 'Moderate', cls: 'text-amber-400 bg-amber-500/10 border-amber-500/20',       barColor: '#fbbf24' }
+  return                  { label: 'Poor',     cls: 'text-red-400 bg-red-500/10 border-red-500/20',             barColor: '#f87171' }
+}
+
+/**
+ * 7-section success display for a completed OcrStructuredData extraction.
+ * Module-level component — never defined inside a render function.
+ */
+function OcrStructuredDisplay({ data }: { data: OcrStructuredData }) {
+  const qb = qualityBadge(data.extraction_quality_score)
+
+  const hasEntities = !!data.generic_entities &&
+    Object.values(data.generic_entities).some(arr => arr.length > 0)
+  const hasSpecific = !!data.document_specific_data &&
+    Object.values(data.document_specific_data).some(v => v !== null)
+  const hasWarnings = data.suspicious_indicators.length > 0
+  const hasMissing  = data.missing_fields.length > 0
+  const hasNotes    = data.confidence_notes.length > 0
+
+  return (
+    <div className="space-y-2.5">
+
+      {/* ── Section 1: Document Classification ─────────────────────────────── */}
+      <div className="flex items-center justify-between gap-2 rounded-lg border border-slate-800/60 bg-slate-800/20 px-3 py-2.5">
+        <div>
+          <p className="text-[9px] font-semibold uppercase tracking-widest text-slate-600 mb-0.5">Document Type</p>
+          <p className="text-xs font-semibold text-slate-200">{fmtDocType(data.document_type)}</p>
+        </div>
+        <div className="text-right">
+          <p className="text-[9px] font-semibold uppercase tracking-widest text-slate-600 mb-0.5">OCR Confidence</p>
+          <p className="text-xs font-semibold text-slate-200">{data.ocr_confidence}%</p>
+        </div>
+      </div>
+
+      {/* ── Section 2: Extraction Quality ──────────────────────────────────── */}
+      <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-800/60 bg-slate-800/20 px-3 py-2.5">
+        <div className="flex-1 min-w-0">
+          <p className="text-[9px] font-semibold uppercase tracking-widest text-slate-600 mb-1.5">Extraction Quality</p>
+          <div className="flex items-center gap-2">
+            <div className="h-1.5 flex-1 rounded-full bg-slate-700/60 overflow-hidden">
+              <div
+                className="h-full rounded-full transition-all"
+                style={{ width: `${data.extraction_quality_score}%`, backgroundColor: qb.barColor }}
+              />
+            </div>
+            <span className="text-[10px] font-mono font-semibold text-slate-300 tabular-nums shrink-0">
+              {data.extraction_quality_score}/100
+            </span>
+          </div>
+        </div>
+        <span className={`shrink-0 text-[10px] font-semibold border rounded-full px-2 py-0.5 ${qb.cls}`}>
+          {qb.label}
+        </span>
+      </div>
+
+      {/* ── Section 3: Generic Entities ────────────────────────────────────── */}
+      {hasEntities && data.generic_entities && (
+        <div className="rounded-lg border border-slate-800/60 bg-slate-800/20 px-3 py-2.5">
+          <p className="text-[9px] font-semibold uppercase tracking-widest text-slate-600 mb-2">
+            Extracted Entities
+          </p>
+          <div className="space-y-1.5">
+            {(Object.entries(data.generic_entities) as [string, string[]][]).map(([key, values]) => {
+              if (!values || values.length === 0) return null
+              return (
+                <div key={key} className="flex items-start gap-2">
+                  <p className="text-[9px] font-semibold uppercase tracking-wider text-slate-600 w-20 shrink-0 mt-0.5">
+                    {key}
+                  </p>
+                  <div className="flex flex-wrap gap-1">
+                    {values.map((v, i) => (
+                      <span
+                        key={i}
+                        className="text-[10px] font-mono text-slate-300 bg-slate-700/40 border border-slate-700/60 rounded px-1.5 py-0.5"
+                      >
+                        {v}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ── Section 4: Document-Specific Fields ────────────────────────────── */}
+      {hasSpecific && data.document_specific_data && (
+        <div className="rounded-lg border border-slate-800/60 bg-slate-800/20 px-3 py-2.5">
+          <p className="text-[9px] font-semibold uppercase tracking-widest text-slate-600 mb-2">
+            Document Fields
+          </p>
+          <div className="space-y-1.5">
+            {(Object.entries(data.document_specific_data) as [string, string | null][])
+              .filter(([, v]) => v !== null)
+              .map(([key, val], i) => (
+                <motion.div
+                  key={key}
+                  initial={{ opacity: 0, x: -8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ duration: 0.25, delay: i * 0.04, ease: 'easeOut' }}
+                  className="flex items-center justify-between gap-4"
+                >
+                  <p className="text-[10px] text-slate-500 shrink-0">{fmtKey(key)}</p>
+                  <p className="text-[10px] font-mono font-semibold text-slate-200 text-right truncate">{val}</p>
+                </motion.div>
+              ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Section 5: AI Warnings ─────────────────────────────────────────── */}
+      {hasWarnings && (
+        <div className="rounded-lg border border-amber-500/15 bg-amber-500/5 px-3 py-2.5">
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <IconAlertTriangle className="w-3 h-3 text-amber-400 shrink-0" />
+            <p className="text-[9px] font-semibold uppercase tracking-widest text-amber-500">AI Warnings</p>
+          </div>
+          <div className="space-y-1">
+            {data.suspicious_indicators.map((indicator, i) => (
+              <p key={i} className="text-[10px] text-amber-300/80 leading-relaxed">• {indicator}</p>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Section 6: Missing Fields ──────────────────────────────────────── */}
+      {hasMissing && (
+        <div className="rounded-lg border border-slate-700/40 bg-slate-800/20 px-3 py-2.5">
+          <p className="text-[9px] font-semibold uppercase tracking-widest text-slate-600 mb-1.5">Missing Fields</p>
+          <div className="flex flex-wrap gap-1">
+            {data.missing_fields.map((field, i) => (
+              <span
+                key={i}
+                className="text-[10px] text-slate-400 bg-slate-700/30 border border-slate-700/50 rounded px-1.5 py-0.5"
+              >
+                {fmtKey(field)}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Section 7: Confidence Notes ────────────────────────────────────── */}
+      {hasNotes && (
+        <div className="rounded-lg border border-slate-700/40 bg-slate-800/20 px-3 py-2.5">
+          <p className="text-[9px] font-semibold uppercase tracking-widest text-slate-600 mb-1.5">Confidence Notes</p>
+          <div className="space-y-1">
+            {data.confidence_notes.map((note, i) => (
+              <p key={i} className="text-[10px] text-slate-500 leading-relaxed">• {note}</p>
+            ))}
+          </div>
+        </div>
+      )}
+
+    </div>
+  )
 }
 
 function fmtTs(iso: string): string {
@@ -425,8 +597,64 @@ function MetaChip({ label, value }: { label: string; value: string }) {
   )
 }
 
-function OcrExtractionCard({ ocrExtraction }: { ocrExtraction?: OcrExtraction | null }) {
-  // ── Console log on mount / change ─────────────────────────────────────────
+// ─── OCR trigger button ───────────────────────────────────────────────────────
+// Module-level so it's never re-created during render (react-hooks/static-components).
+
+function TriggerButton({
+  label,
+  onClick,
+  isTriggering,
+}: {
+  label:        string
+  onClick:      () => void
+  isTriggering: boolean
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={isTriggering}
+      className="inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+    >
+      {isTriggering ? (
+        <>
+          <motion.div
+            className="w-3 h-3 rounded-full border-2 border-white border-t-transparent"
+            animate={{ rotate: 360 }}
+            transition={{ duration: 0.7, repeat: Infinity, ease: 'linear' }}
+          />
+          Analyzing…
+        </>
+      ) : (
+        <>
+          <IconRefresh className="w-3 h-3" />
+          {label}
+        </>
+      )}
+    </button>
+  )
+}
+
+interface OcrExtractionCardProps {
+  ocrExtraction?: OcrExtraction | null
+  /** Callback to trigger OCR — undefined for demo reviews that have no DB row */
+  onTriggerOcr?: () => void
+  /** True while useTransition is pending (button is disabled, card shows spinner) */
+  isTriggering?: boolean
+  /** Client-side error from the server action (shown until page refreshes) */
+  ocrError?: string | null
+  /** Latest ocr_jobs row — drives the queued/processing UI states */
+  latestOcrJob?: OcrJobSummary | null
+}
+
+function OcrExtractionCard({
+  ocrExtraction,
+  onTriggerOcr,
+  isTriggering = false,
+  ocrError,
+  latestOcrJob,
+}: OcrExtractionCardProps) {
+  // ── Console log on extraction change ──────────────────────────────────────
   useEffect(() => {
     if (!ocrExtraction) {
       console.log('[OcrExtraction] status: no-extraction (undefined/null)')
@@ -442,43 +670,55 @@ function OcrExtractionCard({ ocrExtraction }: { ocrExtraction?: OcrExtraction | 
         ? 'raw-text'
         : ocrExtraction.status
     console.log('[OcrExtraction]', {
-      status:           ocrExtraction.status,
-      engine:           ocrExtraction.engine    ?? 'unknown',
-      confidence:       ocrExtraction.confidence,
-      processingMs:     ocrExtraction.processingMs,
+      status:       ocrExtraction.status,
+      engine:       ocrExtraction.engine ?? 'unknown',
+      confidence:   ocrExtraction.confidence,
+      processingMs: ocrExtraction.processingMs,
       structuredKeys,
-      hasRawText:       !!ocrExtraction.rawText,
+      hasRawText:   !!ocrExtraction.rawText,
       renderPath,
     })
   }, [ocrExtraction])
 
-  // ── Derived header state ───────────────────────────────────────────────────
-  const isNone       = !ocrExtraction
-  const isProcessing = !!ocrExtraction && (ocrExtraction.status === 'pending' || ocrExtraction.status === 'processing')
-  const isFailed     = ocrExtraction?.status === 'failed'
-  const isSuccess    = ocrExtraction?.status === 'completed'
+  // ── Derived state ──────────────────────────────────────────────────────────
+  // Priority order (highest first):
+  //   isTriggering — optimistic spinner while useTransition is pending
+  //   isProcessing — job is claimed by worker (DB status = 'processing')
+  //   isQueued     — job enqueued but not yet claimed (DB status = 'pending')
+  //   isFailed     — latest extraction or job failed
+  //   isSuccess    — latest extraction completed
+  //   isNone       — no extraction and no active job
+  const isTriggering_ = isTriggering
+  const isProcessing  = isTriggering_ || (
+    !!ocrExtraction && (ocrExtraction.status === 'pending' || ocrExtraction.status === 'processing')
+  ) || (!isTriggering_ && !ocrExtraction && latestOcrJob?.status === 'processing')
+  const isQueued      = !isTriggering_ && !isProcessing && !ocrExtraction && latestOcrJob?.status === 'pending'
+  const isFailed      = !isTriggering_ && !isQueued && !isProcessing && ocrExtraction?.status === 'failed'
+  const isSuccess     = !isTriggering_ && !isQueued && !isProcessing && ocrExtraction?.status === 'completed'
+  const isNone        = !isTriggering_ && !isQueued && !isProcessing && !ocrExtraction
 
-  const fieldCount = isSuccess && ocrExtraction.structuredData
-    ? Object.keys(ocrExtraction.structuredData).length
-    : 0
-
-  const statusBadge = isNone
-    ? { label: 'No Data',    cls: 'text-slate-500 bg-slate-800/60 border-slate-700/40' }
-    : isProcessing
+  const statusBadge = isProcessing
     ? { label: 'Processing', cls: 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20' }
+    : isQueued
+    ? { label: 'Queued',     cls: 'text-blue-400 bg-blue-500/10 border-blue-500/20' }
     : isFailed
     ? { label: 'Failed',     cls: 'text-red-400 bg-red-500/10 border-red-500/20' }
-    : { label: 'Complete',   cls: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' }
+    : isSuccess
+    ? { label: 'Complete',   cls: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' }
+    : { label: 'No Data',    cls: 'text-slate-500 bg-slate-800/60 border-slate-700/40' }
 
-  const subtitle = isNone
-    ? 'No extraction available'
-    : isProcessing
-    ? 'Running OCR…'
+  const subtitle = isProcessing
+    ? 'Analyzing document…'
+    : isQueued
+    ? 'Queued for AI analysis'
     : isFailed
     ? 'Extraction failed'
-    : `${fieldCount} field${fieldCount !== 1 ? 's' : ''} extracted`
+    : isSuccess
+    ? (ocrExtraction!.structuredData?.document_type
+        ? fmtDocType(ocrExtraction!.structuredData.document_type)
+        : 'Extraction complete')
+    : 'No extraction available'
 
-  // SVG icon shared across header
   const docIcon = (
     <svg className="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
       <path d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
@@ -502,22 +742,48 @@ function OcrExtractionCard({ ocrExtraction }: { ocrExtraction?: OcrExtraction | 
       </div>
 
       {/* ── Body ────────────────────────────────────────────────────────────── */}
-      <div className="p-4">
+      <div className="p-4 space-y-3">
 
-        {/* State A — no extraction ──────────────────────────────────────────── */}
-        {isNone && (
-          <div className="rounded-lg border border-slate-800/60 bg-slate-800/20 px-4 py-8 text-center">
-            <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-slate-800/60 text-slate-600">
-              {docIcon}
-            </div>
-            <p className="text-xs font-semibold text-slate-400 mb-1">No extraction available</p>
-            <p className="text-[10px] text-slate-600 leading-relaxed">
-              OCR has not been run on this submission yet.
-            </p>
+        {/* Client-side error banner — shown immediately on action failure,
+            before router.refresh() delivers the updated server state */}
+        {ocrError && !isTriggering_ && (
+          <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2.5 flex items-start gap-2">
+            <IconAlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
+            <p className="text-[10px] text-amber-300 leading-relaxed">{ocrError}</p>
           </div>
         )}
 
-        {/* State B — processing ─────────────────────────────────────────────── */}
+        {/* State A — no extraction ──────────────────────────────────────────── */}
+        {isNone && (
+          <div className="rounded-lg border border-slate-800/60 bg-slate-800/20 px-4 py-6 text-center">
+            <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-slate-800/60 text-slate-600">
+              {docIcon}
+            </div>
+            <p className="text-xs font-semibold text-slate-400 mb-1">No OCR extraction yet</p>
+            <p className="text-[10px] text-slate-600 leading-relaxed mb-4">
+              Run OCR to extract structured data from this submission.
+            </p>
+            {onTriggerOcr && (
+              <TriggerButton label="Run OCR" onClick={onTriggerOcr} isTriggering={isTriggering_} />
+            )}
+          </div>
+        )}
+
+        {/* State B — queued (job enqueued, worker not yet claimed) ─────────── */}
+        {isQueued && (
+          <div className="rounded-lg border border-blue-500/15 bg-blue-500/5 px-4 py-8 text-center">
+            <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-blue-500/10 text-blue-400">
+              <svg className="w-5 h-5 stroke-current fill-none" viewBox="0 0 24 24" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 6v6l4 2" />
+                <circle cx="12" cy="12" r="9" />
+              </svg>
+            </div>
+            <p className="text-xs font-semibold text-blue-300 mb-1">Queued for AI analysis</p>
+            <p className="text-[10px] text-slate-500">Waiting for the OCR worker to pick up this job…</p>
+          </div>
+        )}
+
+        {/* State C — processing (optimistic while isTriggering, or DB status) ─ */}
         {isProcessing && (
           <div className="rounded-lg border border-indigo-500/15 bg-indigo-500/5 px-4 py-8 text-center">
             <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center">
@@ -527,11 +793,11 @@ function OcrExtractionCard({ ocrExtraction }: { ocrExtraction?: OcrExtraction | 
                 transition={{ duration: 0.8, repeat: Infinity, ease: 'linear' }}
               />
             </div>
-            <p className="text-xs font-semibold text-indigo-300 mb-1">Running OCR…</p>
+            <p className="text-xs font-semibold text-indigo-300 mb-1">Analyzing document…</p>
             <p className="text-[10px] text-slate-500">
-              {ocrExtraction!.engine
-                ? `Engine: ${ocrExtraction!.engine}`
-                : 'Extraction in progress'}
+              {!isTriggering_ && ocrExtraction?.engine
+                ? `Engine: ${ocrExtraction.engine}`
+                : 'Sending to OpenAI Vision API'}
             </p>
           </div>
         )}
@@ -542,78 +808,41 @@ function OcrExtractionCard({ ocrExtraction }: { ocrExtraction?: OcrExtraction | 
             <div className="rounded-lg border border-red-500/20 bg-red-500/5 px-4 py-5">
               <div className="flex items-start gap-3">
                 <IconAlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
-                <div>
+                <div className="flex-1 min-w-0">
                   <p className="text-xs font-semibold text-red-300 mb-1">Extraction failed</p>
                   <p className="text-[10px] text-slate-500 leading-relaxed">
                     {ocrExtraction!.engine
-                      ? `The ${ocrExtraction!.engine} engine encountered an error processing this file.`
+                      ? `The ${ocrExtraction!.engine} engine could not process this file.`
                       : 'The OCR engine encountered an error processing this file.'}
                   </p>
                 </div>
               </div>
             </div>
-            {/* Retry placeholder — wired up once OCR pipeline is live */}
-            <button
-              type="button"
-              disabled
-              className="flex items-center gap-1.5 text-[10px] text-indigo-400 opacity-40 cursor-not-allowed"
-            >
-              <IconRefresh className="w-3 h-3" />
-              Retry extraction
-            </button>
+            {onTriggerOcr && (
+              <TriggerButton label="Retry OCR" onClick={onTriggerOcr} isTriggering={isTriggering_} />
+            )}
           </div>
         )}
 
         {/* State D — success ────────────────────────────────────────────────── */}
         {isSuccess && (
-          <div className="space-y-3">
-            {/* Metadata row */}
-            <div className="flex items-center gap-4 flex-wrap pb-3 border-b border-slate-800/60">
+          <div className="space-y-2.5">
+            {/* Metadata strip */}
+            <div className="flex items-center gap-4 flex-wrap pb-2.5 border-b border-slate-800/60">
               {ocrExtraction!.engine && (
-                <MetaChip label="Engine"      value={ocrExtraction!.engine} />
-              )}
-              {ocrExtraction!.confidence !== null && (
-                <MetaChip label="Confidence"  value={`${ocrExtraction!.confidence}%`} />
+                <MetaChip label="Engine"     value={ocrExtraction!.engine} />
               )}
               {ocrExtraction!.processingMs !== null && (
-                <MetaChip label="Time"        value={`${ocrExtraction!.processingMs} ms`} />
+                <MetaChip label="Time"       value={`${ocrExtraction!.processingMs} ms`} />
               )}
-              <MetaChip label="Extracted"   value={fmtTs(ocrExtraction!.extractedAt)} />
+              <MetaChip label="Extracted"  value={fmtTs(ocrExtraction!.extractedAt)} />
             </div>
 
-            {/* Structured field rows */}
-            {ocrExtraction!.structuredData && fieldCount > 0 ? (
-              <div className="space-y-2">
-                {Object.entries(ocrExtraction!.structuredData).map(([key, val], i) => (
-                  <motion.div
-                    key={key}
-                    initial={{ opacity: 0, x: -12 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ duration: 0.3, delay: i * 0.05, ease: 'easeOut' }}
-                    className="flex items-center justify-between gap-4 rounded-lg border border-slate-800/60 bg-slate-800/30 px-3 py-2.5"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
-                        {fmtKey(key)}
-                      </p>
-                      <p className="text-xs font-mono font-semibold mt-0.5 truncate text-slate-100">
-                        {fmtValue(val)}
-                      </p>
-                    </div>
-                  </motion.div>
-                ))}
-              </div>
-            ) : !ocrExtraction!.rawText ? (
-              /* Completed but nothing extracted at all */
-              <div className="rounded-lg border border-slate-800/60 bg-slate-800/20 px-4 py-5 text-center">
-                <p className="text-[11px] text-slate-500">
-                  No fields could be extracted from this document.
-                </p>
-              </div>
-            ) : null}
-
-            {/* Raw text — shown when structured_data is absent but raw_text exists */}
-            {!ocrExtraction!.structuredData && ocrExtraction!.rawText && (
+            {/* 7-section structured display */}
+            {ocrExtraction!.structuredData ? (
+              <OcrStructuredDisplay data={ocrExtraction!.structuredData} />
+            ) : ocrExtraction!.rawText ? (
+              /* Raw-text fallback — model returned non-JSON */
               <div className="rounded-lg border border-slate-700/40 bg-slate-800/20 px-3 py-3">
                 <p className="text-[9px] font-semibold uppercase tracking-widest text-slate-600 mb-2">
                   Raw Text
@@ -622,10 +851,159 @@ function OcrExtractionCard({ ocrExtraction }: { ocrExtraction?: OcrExtraction | 
                   {ocrExtraction!.rawText}
                 </p>
               </div>
+            ) : (
+              <div className="rounded-lg border border-slate-800/60 bg-slate-800/20 px-4 py-5 text-center">
+                <p className="text-[11px] text-slate-500">
+                  No fields could be extracted from this document.
+                </p>
+              </div>
             )}
           </div>
         )}
 
+      </div>
+    </Card>
+  )
+}
+
+// ─── Fraud Analysis card ──────────────────────────────────────────────────────
+//
+// Renders when a real DB review has fraud signals generated by the OCR pipeline.
+// Shows risk score, risk level, signal count, and each signal with title /
+// description / severity / confidence.  Demo reviews without fraudAnalysis fall
+// back to the legacy FraudChecksCard below.
+
+const SEVERITY_COLOR: Record<FraudSeverity, {
+  bar:    string
+  badge:  string
+  dot:    string
+  ring:   string
+  text:   string
+  header: string
+}> = {
+  low:      { bar: 'bg-emerald-500', badge: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20', dot: 'bg-emerald-400', ring: 'border-emerald-500/20 bg-emerald-500/5', text: 'text-emerald-300', header: 'text-emerald-400' },
+  medium:   { bar: 'bg-amber-400',   badge: 'text-amber-300   bg-amber-400/10   border-amber-400/20',   dot: 'bg-amber-400',   ring: 'border-amber-400/20   bg-amber-400/5',   text: 'text-amber-300',   header: 'text-amber-400'   },
+  high:     { bar: 'bg-orange-500',  badge: 'text-orange-300  bg-orange-500/10  border-orange-500/20',  dot: 'bg-orange-500',  ring: 'border-orange-500/20  bg-orange-500/5',  text: 'text-orange-300',  header: 'text-orange-400'  },
+  critical: { bar: 'bg-red-500',     badge: 'text-red-300     bg-red-500/10     border-red-500/20',     dot: 'bg-red-500',     ring: 'border-red-500/20     bg-red-500/5',     text: 'text-red-300',     header: 'text-red-400'     },
+}
+
+const RISK_LABEL: Record<FraudSeverity, string> = {
+  low: 'Low Risk', medium: 'Medium Risk', high: 'High Risk', critical: 'Critical Risk',
+}
+
+function FraudSignalRow({ signal }: { signal: FraudSignalView }) {
+  const [expanded, setExpanded] = useState(false)
+  const colors = SEVERITY_COLOR[signal.severity]
+
+  return (
+    <div className={`rounded-lg border px-3 py-2.5 ${colors.ring}`}>
+      <button
+        type="button"
+        onClick={() => setExpanded(v => !v)}
+        className="w-full flex items-start gap-2.5 text-left"
+      >
+        <span className={`mt-1 h-2 w-2 rounded-full shrink-0 ${colors.dot}`} />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[11px] font-semibold text-slate-200">{signal.title}</span>
+            <span className={`text-[9px] font-semibold border rounded-full px-1.5 py-0.5 ${colors.badge}`}>
+              {signal.severity.toUpperCase()}
+            </span>
+            <span className="text-[9px] text-slate-500 ml-auto shrink-0">
+              {signal.confidence}% confidence
+            </span>
+          </div>
+          {expanded && (
+            <p className="text-[10px] text-slate-400 leading-relaxed mt-1.5">
+              {signal.description}
+            </p>
+          )}
+        </div>
+        <svg
+          className={`w-3 h-3 text-slate-600 shrink-0 mt-0.5 transition-transform ${expanded ? 'rotate-180' : ''}`}
+          viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
+        >
+          <path d="M6 9l6 6 6-6" />
+        </svg>
+      </button>
+    </div>
+  )
+}
+
+function FraudAnalysisCard({ analysis }: { analysis: FraudAnalysisSummary }) {
+  const colors  = SEVERITY_COLOR[analysis.riskLevel]
+  const label   = RISK_LABEL[analysis.riskLevel]
+  const barPct  = analysis.riskScore
+
+  const shieldIcon = (
+    <svg className="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+    </svg>
+  )
+
+  return (
+    <Card padding="none">
+      {/* ── Header ──────────────────────────────────────────────────────────── */}
+      <div className="flex items-center gap-2.5 px-4 py-3 border-b border-slate-800/60">
+        <div className={`flex h-6 w-6 items-center justify-center rounded-md ${analysis.riskLevel === 'low' ? 'bg-emerald-500/10 text-emerald-400' : analysis.riskLevel === 'medium' ? 'bg-amber-500/10 text-amber-400' : analysis.riskLevel === 'high' ? 'bg-orange-500/10 text-orange-400' : 'bg-red-500/10 text-red-400'}`}>
+          {shieldIcon}
+        </div>
+        <div>
+          <span className="text-xs font-semibold text-slate-200">Fraud Analysis</span>
+          <p className="text-[10px] text-slate-500 mt-0.5">
+            {analysis.signalCount === 0 ? 'No signals detected' : `${analysis.signalCount} signal${analysis.signalCount !== 1 ? 's' : ''} detected`}
+          </p>
+        </div>
+        <span className={`ml-auto text-[10px] font-semibold border rounded-full px-2 py-0.5 ${colors.badge}`}>
+          {label}
+        </span>
+      </div>
+
+      <div className="p-4 space-y-3">
+        {/* ── Risk score bar ──────────────────────────────────────────────── */}
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] text-slate-500">Risk Score</span>
+            <span className={`text-xs font-bold tabular-nums ${colors.text}`}>
+              {analysis.riskScore}<span className="text-[9px] font-normal text-slate-600">/100</span>
+            </span>
+          </div>
+          <div className="h-1.5 w-full rounded-full bg-slate-800/80 overflow-hidden">
+            <motion.div
+              className={`h-full rounded-full ${colors.bar}`}
+              initial={{ width: 0 }}
+              animate={{ width: `${barPct}%` }}
+              transition={{ duration: 0.6, ease: 'easeOut' }}
+            />
+          </div>
+        </div>
+
+        {/* ── No signals state ────────────────────────────────────────────── */}
+        {analysis.signalCount === 0 && (
+          <div className="rounded-lg border border-emerald-500/15 bg-emerald-500/5 px-4 py-5 flex items-center gap-3">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-400 shrink-0">
+              <svg className="w-4 h-4 stroke-current fill-none" viewBox="0 0 24 24" strokeWidth={2}>
+                <path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-emerald-300">No Fraud Signals Detected</p>
+              <p className="text-[10px] text-slate-500 mt-0.5">All deterministic checks passed for this submission.</p>
+            </div>
+          </div>
+        )}
+
+        {/* ── Signal list ─────────────────────────────────────────────────── */}
+        {analysis.signalCount > 0 && (
+          <div className="space-y-1.5">
+            <p className="text-[9px] font-semibold uppercase tracking-widest text-slate-600 pb-0.5">
+              Detected Signals — click to expand
+            </p>
+            {analysis.signals.map(signal => (
+              <FraudSignalRow key={signal.id} signal={signal} />
+            ))}
+          </div>
+        )}
       </div>
     </Card>
   )
@@ -1190,6 +1568,165 @@ function AuditTimelineCard({ entries }: { entries: AuditEntry[] }) {
   )
 }
 
+// ─── OCR Timeline ─────────────────────────────────────────────────────────────
+//
+// Renders an immutable chronological timeline of every OCR execution for this
+// review.  Each run contributes 2–5 events (triggered → classified → quality →
+// warnings → completed/failed).  Multiple retries produce stacked run groups.
+// Supports future fraud/comment/assignment events via the shared event schema.
+
+const OCR_TIMELINE_DOT: Record<OcrTimelineStatus, string> = {
+  success:    'bg-emerald-500',
+  warning:    'bg-amber-500',
+  failed:     'bg-red-500',
+  processing: 'bg-indigo-500',
+  info:       'bg-slate-500',
+}
+
+const OCR_TIMELINE_LABEL: Record<OcrTimelineStatus, string> = {
+  success:    'text-emerald-300',
+  warning:    'text-amber-300',
+  failed:     'text-red-300',
+  processing: 'text-indigo-300',
+  info:       'text-slate-400',
+}
+
+function OcrTimelineCard({ history }: { history: OcrHistoryItem[] }) {
+  const events = buildOcrTimeline(history)
+
+  if (events.length === 0) return null
+
+  const runsLabel = `${history.length} run${history.length !== 1 ? 's' : ''}`
+
+  // ── Run summary strip ────────────────────────────────────────────────────────
+  // Sorted newest-first (as stored) — shows a quick at-a-glance history table.
+  const sortedHistory = [...history].sort(
+    (a, b) => b.createdAt.localeCompare(a.createdAt)
+  )
+
+  return (
+    <Card padding="none">
+      {/* Header */}
+      <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-slate-800/60">
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-6 w-6 items-center justify-center rounded-md bg-violet-500/10 text-violet-400">
+            <svg className="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+          <div>
+            <span className="text-xs font-semibold text-slate-200">OCR Execution Timeline</span>
+            <p className="text-[10px] text-slate-500 mt-0.5">{runsLabel} · {events.length} events · immutable</p>
+          </div>
+        </div>
+        {/* Status legend */}
+        <div className="hidden sm:flex items-center gap-3 shrink-0">
+          {(
+            [
+              { label: 'Success',    dot: 'bg-emerald-500' },
+              { label: 'Warning',    dot: 'bg-amber-500'   },
+              { label: 'Failed',     dot: 'bg-red-500'     },
+              { label: 'Processing', dot: 'bg-indigo-500'  },
+            ] as const
+          ).map(({ label, dot }) => (
+            <div key={label} className="flex items-center gap-1.5">
+              <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${dot}`} />
+              <span className="text-[9px] text-slate-600">{label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Run summary table */}
+      {sortedHistory.length > 1 && (
+        <div className="px-4 py-3 border-b border-slate-800/40 overflow-x-auto">
+          <table className="w-full text-[10px] font-mono">
+            <thead>
+              <tr className="text-[9px] font-semibold uppercase tracking-widest text-slate-600">
+                <th className="text-left pb-1.5 pr-4">Run</th>
+                <th className="text-left pb-1.5 pr-4">Timestamp</th>
+                <th className="text-left pb-1.5 pr-4">Status</th>
+                <th className="text-left pb-1.5 pr-4">Document</th>
+                <th className="text-right pb-1.5">Quality</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800/40">
+              {sortedHistory.map((run, i) => {
+                const statusCls =
+                  run.status === 'completed' ? 'text-emerald-400' :
+                  run.status === 'failed'    ? 'text-red-400'     :
+                  run.status === 'processing'? 'text-indigo-400'  :
+                                              'text-slate-500'
+                const qb = run.qualityScore !== null
+                  ? qualityBadge(run.qualityScore)
+                  : null
+                return (
+                  <tr key={run.id} className="text-slate-400">
+                    <td className="py-1.5 pr-4 text-slate-600 tabular-nums">
+                      #{sortedHistory.length - i}
+                    </td>
+                    <td className="py-1.5 pr-4 tabular-nums">
+                      {fmtTs(run.createdAt)}
+                    </td>
+                    <td className={`py-1.5 pr-4 font-semibold capitalize ${statusCls}`}>
+                      {run.status}
+                    </td>
+                    <td className="py-1.5 pr-4">
+                      {run.documentType ? fmtDocType(run.documentType) : '—'}
+                    </td>
+                    <td className="py-1.5 text-right">
+                      {qb ? (
+                        <span className={`text-[9px] font-semibold border rounded-full px-1.5 py-0.5 ${qb.cls}`}>
+                          {run.qualityScore}/100
+                        </span>
+                      ) : '—'}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Event timeline */}
+      <div className="p-4">
+        <div className="relative">
+          <div className="absolute left-[7px] top-2 bottom-2 w-px bg-slate-800" />
+          <div className="space-y-3">
+            <AnimatePresence initial={false}>
+              {events.map((evt, i) => (
+                <motion.div
+                  key={evt.id}
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ duration: 0.25, delay: i * 0.03, ease: 'easeOut' }}
+                  className="flex items-start gap-3 pl-5 relative"
+                >
+                  <div
+                    className={`absolute left-0 top-1.5 h-3.5 w-3.5 rounded-full border-2 border-slate-950 ${OCR_TIMELINE_DOT[evt.status]}`}
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className={`text-[11px] font-semibold ${OCR_TIMELINE_LABEL[evt.status]}`}>
+                      {evt.label}
+                    </p>
+                    {evt.detail && (
+                      <p className="text-[10px] text-slate-500 mt-0.5 leading-relaxed">{evt.detail}</p>
+                    )}
+                  </div>
+                  <span className="shrink-0 text-[9px] font-mono text-slate-600 tabular-nums mt-0.5">
+                    {fmtTs(evt.timestamp)}
+                  </span>
+                </motion.div>
+              ))}
+            </AnimatePresence>
+          </div>
+        </div>
+      </div>
+    </Card>
+  )
+}
+
 // ─── Main component ──────────────────────────────────────────────────────────
 
 export function ReviewDetail({ review }: { review: ReviewDetailType }) {
@@ -1201,6 +1738,60 @@ export function ReviewDetail({ review }: { review: ReviewDetailType }) {
   const [decisionTime, setDecisionTime] = useState<string | null>(null)
   const [currentStatus, setCurrentStatus] = useState(initialStatus)
   const [auditLog, setAuditLog] = useState<AuditEntry[]>(review.auditLog)
+
+  // ── OCR trigger ─────────────────────────────────────────────────────────────
+  const router = useRouter()
+  const [isOcrPending, startOcrTransition] = useTransition()
+  const [ocrError, setOcrError] = useState<string | null>(null)
+
+  const handleTriggerOcr = useCallback(() => {
+    const dbId = review.reviewDbId
+    if (!dbId || isOcrPending) return
+    setOcrError(null)
+    startOcrTransition(async () => {
+      // ── Step 1: Enqueue the OCR job (fast — INSERT only) ──────────────────
+      console.log('[OCR trigger] enqueuing | reviewDbId:', dbId)
+      const result = await triggerReviewOCR(dbId)
+
+      if (!result.success) {
+        console.error('[OCR trigger] enqueue failed | error:', result.error)
+        setOcrError(result.error)
+        router.refresh()
+        return
+      }
+
+      console.log('[OCR trigger] enqueued | jobId:', result.jobId)
+
+      // Refresh immediately so the UI transitions to "Queued for AI analysis"
+      router.refresh()
+
+      // ── Step 2: Kick the worker (runs OCR synchronously in this request) ──
+      // Fire-and-forget the worker route; await it so the transition stays
+      // "pending" until OCR finishes, keeping the processing spinner visible.
+      console.log('[OCR trigger] firing worker | jobId:', result.jobId)
+      try {
+        const workerRes = await fetch('/api/internal/process-ocr', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ reviewId: dbId }),
+        })
+        const workerData = await workerRes.json() as { ok: boolean; error?: string }
+        if (!workerData.ok) {
+          console.error('[OCR trigger] worker reported failure | error:', workerData.error)
+          // Don't set ocrError here — the job row will reflect the failure on refresh
+        } else {
+          console.log('[OCR trigger] worker completed | jobId:', result.jobId)
+        }
+      } catch (fetchErr) {
+        // Network error reaching the internal route — not fatal; job will stay
+        // in pending/processing state and the user can refresh manually.
+        console.error('[OCR trigger] worker fetch error:', fetchErr)
+      }
+
+      // Final refresh — shows the extraction result (or failure) from the DB
+      router.refresh()
+    })
+  }, [review.reviewDbId, isOcrPending, startOcrTransition, router])
 
   const triggerDecision = useCallback((decision: DecisionType) => {
     if (actionState !== 'idle') return
@@ -1324,8 +1915,17 @@ export function ReviewDetail({ review }: { review: ReviewDetailType }) {
 
         {/* Right — analysis + decision */}
         <div className="lg:col-span-3 space-y-4">
-          <OcrExtractionCard ocrExtraction={review.ocrExtraction} />
-          <FraudChecksCard checks={review.fraudChecks} />
+          <OcrExtractionCard
+            ocrExtraction={review.ocrExtraction}
+            onTriggerOcr={review.reviewDbId ? handleTriggerOcr : undefined}
+            isTriggering={isOcrPending}
+            ocrError={ocrError}
+            latestOcrJob={review.latestOcrJob}
+          />
+          {review.fraudAnalysis
+            ? <FraudAnalysisCard analysis={review.fraudAnalysis} />
+            : <FraudChecksCard checks={review.fraudChecks} />
+          }
           <ConfidenceCard confidence={review.confidence} riskScore={review.riskScore} />
           <ReasoningCard reasoning={review.reasoning} />
           <DecisionCard
@@ -1344,8 +1944,13 @@ export function ReviewDetail({ review }: { review: ReviewDetailType }) {
         </div>
       </div>
 
-      {/* Audit timeline — full width */}
-      <div className="mt-5">
+      {/* Full-width bottom row */}
+      <div className="mt-5 space-y-4">
+        {/* OCR timeline — shown only when the review has real DB-backed OCR history */}
+        {review.ocrHistory && review.ocrHistory.length > 0 && (
+          <OcrTimelineCard history={review.ocrHistory} />
+        )}
+        {/* Audit trail */}
         <AuditTimelineCard entries={auditLog} />
       </div>
     </div>
