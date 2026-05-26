@@ -24,7 +24,16 @@
       "Bash(Get-ChildItem \"C:\\\\Users\\\\ADMIN\\\\Downloads\\\\proofpilot\\\\components\" -Recurse -Name)",
       "Bash(Get-ChildItem \"C:\\\\Users\\\\ADMIN\\\\Downloads\\\\proofpilot\\\\lib\" -Recurse -Name)",
       "Bash(npm run *)",
-      "Bash(node -e \"require\\('sharp'\\); console.log\\('sharp ok, version:', require\\('sharp/package.json'\\).version\\)\")"
+      "Bash(node -e \"require\\('sharp'\\); console.log\\('sharp ok, version:', require\\('sharp/package.json'\\).version\\)\")",
+      "Bash(node -e \"const p = require\\('./package.json'\\); console.log\\('next:', p.dependencies?.next || p.devDependencies?.next\\)\")",
+      "Bash(xargs grep -l \"staleTimes\\\\|router.*cache\\\\|client.*cache\\\\|Router Cache\")",
+      "Bash(grep -rn \"from.*lib/actions/reviews\\\\|from.*lib\\\\\\\\\\\\\\\\actions\\\\\\\\\\\\\\\\reviews\\\\|submitReviewDecision\" \"c:/Users/ADMIN/Downloads/proofpilot/app\" \"c:/Users/ADMIN/Downloads/proofpilot/components\" \"c:/Users/ADMIN/Downloads/proofpilot/lib\" --include=\"*.ts\" --include=\"*.tsx\")",
+      "Bash(grep -rn \"lib/actions/reviews\\\\|lib\\\\\\\\\\\\\\\\actions\\\\\\\\\\\\\\\\reviews\" \"c:/Users/ADMIN/Downloads/proofpilot/app\" \"c:/Users/ADMIN/Downloads/proofpilot/components\" \"c:/Users/ADMIN/Downloads/proofpilot/lib\" --include=\"*.ts\" --include=\"*.tsx\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); deps={**d.get\\('dependencies',{}\\),**d.get\\('devDependencies',{}\\)}; keys=[k for k in deps if 'pdf' in k.lower\\(\\) or 'canvas' in k.lower\\(\\)]; [print\\(k,deps[k]\\) for k in sorted\\(keys\\)]\")",
+      "Bash(node -e \"const d=require\\('./package.json'\\); const deps={...d.dependencies,...d.devDependencies}; Object.keys\\(deps\\).filter\\(k=>/pdf|canvas/i.test\\(k\\)\\).sort\\(\\).forEach\\(k=>console.log\\(k,deps[k]\\)\\)\")",
+      "Bash(node -e ' *)",
+      "Bash(node -e *)",
+      "Bash(node)"
     ],
     "additionalDirectories": [
       "c:\\Users\\ADMIN\\Downloads\\proofpilot\\app\\reviews",

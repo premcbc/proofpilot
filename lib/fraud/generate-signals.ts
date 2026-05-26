@@ -22,7 +22,7 @@
  */
 
 import type { OcrStructuredData } from '@/lib/review-data'
-import type { FraudSignalInput, FraudSeverity } from '@/lib/fraud/types'
+import type { FraudSignalInput } from '@/lib/fraud/types'
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -40,6 +40,7 @@ function parseAmount(raw: string): number {
  */
 function isRecognisedDate(raw: string): boolean {
   const trimmed = raw.trim()
+
   // No digits → not a date we care about
   if (!/\d/.test(trimmed)) return true
 
@@ -47,263 +48,462 @@ function isRecognisedDate(raw: string): boolean {
   if (!isNaN(Date.parse(trimmed))) return true
 
   // DD/MM/YYYY or DD-MM-YYYY
-  const dmy = trimmed.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/)
+  const dmy = trimmed.match(
+    /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/
+  )
+
   if (dmy) {
     const [, d, m, y] = dmy
-    return !isNaN(Date.parse(`${y}-${m!.padStart(2, '0')}-${d!.padStart(2, '0')}`))
+
+    return !isNaN(
+      Date.parse(
+        `${y}-${m!.padStart(2, '0')}-${d!.padStart(2, '0')}`
+      )
+    )
   }
 
-  // Month name formats: "21 May 2026", "May 21, 2026"
-  if (/\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b/i.test(trimmed)) {
+  // Month name formats
+  if (
+    /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b/i.test(
+      trimmed
+    )
+  ) {
     return !isNaN(Date.parse(trimmed))
   }
 
-  return false // Has digits but matched no pattern
+  return false
 }
 
 /** True if the string contains keywords suggesting blur or focus issues. */
 function mentionsBlur(note: string): boolean {
-  return /blur|blurry|fuzzy|out.of.focus|unfocused|hazy/i.test(note)
+  return /blur|blurry|fuzzy|out.of.focus|unfocused|hazy/i.test(
+    note
+  )
 }
 
 /** True if the string describes unreadable / obscured content. */
 function mentionsUnreadable(note: string): boolean {
-  return /unreadable|illegible|obscured|covered|redacted|hidden|blocked/i.test(note)
+  return /unreadable|illegible|obscured|covered|redacted|hidden|blocked/i.test(
+    note
+  )
 }
 
 /** True if the string describes cropping or cut-off content. */
 function mentionsCrop(note: string): boolean {
-  return /crop|cropped|cut.off|partial|incomplete|cut out|missing.border|truncat/i.test(note)
+  return /crop|cropped|cut.off|partial|incomplete|cut out|missing.border|truncat/i.test(
+    note
+  )
 }
 
 // ─── Rule functions ───────────────────────────────────────────────────────────
 
-function ruleOcrConfidence(e: OcrStructuredData, out: FraudSignalInput[]): void {
+// ─── Severity model v2 ───────────────────────────────────────────────────────
+//
+// Quality issues   → LOW   : OCR readability, missing fields, crop, blur
+// Suspicious data  → MEDIUM: unusual amounts, formatting anomalies
+// Fraud indicators → HIGH  : duplicates, identity mismatches, structural forgery
+//
+// LOW signals alone can never push a review above MEDIUM risk — see risk-score.ts.
+// This prevents quality limitations being misread as fraud.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ruleOcrConfidence(
+  e: OcrStructuredData,
+  out: FraudSignalInput[]
+): void {
   const c = e.ocr_confidence
-  if (c < 40) {
+
+  if (c < 50) {
     out.push({
       signal_type: 'low_ocr_confidence',
-      severity:    'high',
-      confidence:  92,
-      title:       'Very Low OCR Confidence',
-      description: `OCR text confidence is ${c}% — critical illegibility detected. Extraction results are unreliable.`,
-      metadata:    { ocr_confidence: c },
-    })
-  } else if (c < 60) {
-    out.push({
-      signal_type: 'low_ocr_confidence',
-      severity:    'medium',
-      confidence:  82,
-      title:       'Low OCR Confidence',
-      description: `OCR text confidence is ${c}% — some fields may be incorrectly read.`,
-      metadata:    { ocr_confidence: c },
+      severity: 'low',
+      confidence: 88,
+      title: 'Low OCR Confidence',
+      description: `OCR text confidence is ${c}% — some fields may be unclear or incorrectly read. This reflects image quality, not suspected manipulation.`,
+      metadata: { ocr_confidence: c },
     })
   }
-  // c ≥ 60: acceptable quality, no signal
 }
 
-function ruleBlurryDocument(e: OcrStructuredData, out: FraudSignalInput[]): void {
+function ruleBlurryDocument(
+  e: OcrStructuredData,
+  out: FraudSignalInput[]
+): void {
   const blurNotes = e.confidence_notes.filter(mentionsBlur)
+
   if (blurNotes.length === 0) return
+
   out.push({
     signal_type: 'blurry_document',
-    severity:    'medium',
-    confidence:  78,
-    title:       'Blurry Document',
-    description: `Image appears blurry or out of focus. OCR note: "${blurNotes[0]}"`,
-    metadata:    { notes: blurNotes },
+    severity: 'low',
+    confidence: 75,
+    title: 'Blurry or Out-of-Focus Image',
+    description: `Image quality is limited due to blur or focus issues. OCR note: "${blurNotes[0]}". This is a capture quality limitation, not evidence of manipulation.`,
+    metadata: { notes: blurNotes },
   })
 }
 
-function ruleUnreadableRegions(e: OcrStructuredData, out: FraudSignalInput[]): void {
-  const unreadableNotes = e.confidence_notes.filter(mentionsUnreadable)
+function ruleUnreadableRegions(
+  e: OcrStructuredData,
+  out: FraudSignalInput[]
+): void {
+  const unreadableNotes =
+    e.confidence_notes.filter(mentionsUnreadable)
+
   if (unreadableNotes.length === 0) return
+
   out.push({
     signal_type: 'unreadable_regions',
-    severity:    'high',
-    confidence:  86,
-    title:       'Unreadable Regions Detected',
-    description: `Key document regions could not be extracted. OCR note: "${unreadableNotes[0]}"`,
-    metadata:    { notes: unreadableNotes, count: unreadableNotes.length },
+    severity: 'low',
+    confidence: 80,
+    title: 'Some Regions Unreadable',
+    description: `Certain document areas could not be extracted clearly. OCR note: "${unreadableNotes[0]}". May reflect image quality rather than intentional obscuring.`,
+    metadata: {
+      notes: unreadableNotes,
+      count: unreadableNotes.length,
+    },
   })
 }
 
-function ruleMissingAmount(e: OcrStructuredData, out: FraudSignalInput[]): void {
+function ruleMissingAmount(
+  e: OcrStructuredData,
+  out: FraudSignalInput[]
+): void {
   const amounts = e.generic_entities?.amounts ?? []
+
   if (amounts.length > 0) return
+
   out.push({
     signal_type: 'missing_amount',
-    severity:    'high',
-    confidence:  88,
-    title:       'No Amount Found',
-    description: 'No monetary amount could be extracted from this document. A financial submission without a visible amount is a strong fraud indicator.',
-    metadata:    {},
+    severity: 'low',
+    confidence: 80,
+    title: 'No Monetary Amount Extracted',
+    description:
+      'No monetary amount could be read from this document. This may reflect OCR quality or document layout, not necessarily fraud.',
+    metadata: {},
   })
 }
 
-function ruleMissingDate(e: OcrStructuredData, out: FraudSignalInput[]): void {
+function ruleMissingDate(
+  e: OcrStructuredData,
+  out: FraudSignalInput[]
+): void {
   const dates = e.generic_entities?.dates ?? []
+
   if (dates.length > 0) return
+
   out.push({
     signal_type: 'missing_date',
-    severity:    'medium',
-    confidence:  82,
-    title:       'No Date Found',
-    description: 'No dates were detected in the document. Most legitimate financial documents contain at least one date.',
-    metadata:    {},
+    severity: 'low',
+    confidence: 75,
+    title: 'No Date Found',
+    description:
+      'No dates were detected in the document. This may indicate incomplete extraction rather than document fraud.',
+    metadata: {},
   })
 }
 
-function ruleMissingVendor(e: OcrStructuredData, out: FraudSignalInput[]): void {
+function ruleMissingVendor(
+  e: OcrStructuredData,
+  out: FraudSignalInput[]
+): void {
   if (e.document_type !== 'invoice') return
+
   const dsd = e.document_specific_data
+
   if (dsd?.vendor) return
+
   out.push({
     signal_type: 'missing_vendor',
-    severity:    'medium',
-    confidence:  88,
-    title:       'Missing Vendor Name',
-    description: 'Invoice vendor or issuer name could not be extracted. Legitimate invoices always identify the issuing organisation.',
-    metadata:    {},
+    severity: 'low',
+    confidence: 80,
+    title: 'Vendor Name Not Extracted',
+    description:
+      'Invoice vendor or issuer name could not be read. May reflect poor image quality or non-standard invoice layout.',
+    metadata: {},
   })
 }
 
-function ruleMissingInvoiceNumber(e: OcrStructuredData, out: FraudSignalInput[]): void {
+function ruleMissingInvoiceNumber(
+  e: OcrStructuredData,
+  out: FraudSignalInput[]
+): void {
   if (e.document_type !== 'invoice') return
+
   const dsd = e.document_specific_data
+
   if (dsd?.invoice_number) return
+
   out.push({
     signal_type: 'missing_invoice_number',
-    severity:    'medium',
-    confidence:  85,
-    title:       'Missing Invoice Number',
-    description: 'Invoice number is absent or unreadable. Legitimate invoices always carry a unique reference number.',
-    metadata:    {},
+    severity: 'low',
+    confidence: 78,
+    title: 'Invoice Number Not Found',
+    description:
+      'Invoice reference number is absent or unreadable. May reflect extraction limitations on non-standard invoice formats.',
+    metadata: {},
   })
 }
 
-function ruleExcessiveMissingFields(e: OcrStructuredData, out: FraudSignalInput[]): void {
+function ruleExcessiveMissingFields(
+  e: OcrStructuredData,
+  out: FraudSignalInput[]
+): void {
   const n = e.missing_fields.length
+
   if (n <= 2) return
-  const severity: FraudSeverity = n > 5 ? 'high' : 'medium'
+
   out.push({
     signal_type: 'excessive_missing_fields',
-    severity,
-    confidence:  90,
-    title:       `${n} Critical Fields Missing`,
-    description: `${n} expected fields for a ${e.document_type} document could not be extracted: ${e.missing_fields.slice(0, 4).join(', ')}${n > 4 ? '…' : ''}.`,
-    metadata:    { fields: e.missing_fields, count: n },
+    severity: 'low',
+    confidence: 85,
+    title: `${n} Fields Not Extracted`,
+    description: `${n} expected fields for a ${e.document_type} could not be read: ${e.missing_fields
+      .slice(0, 4)
+      .join(', ')}${n > 4 ? '…' : ''}. Likely reflects document layout or image quality.`,
+    metadata: {
+      fields: e.missing_fields,
+      count: n,
+    },
   })
 }
 
-function ruleImpossibleAmount(e: OcrStructuredData, out: FraudSignalInput[]): void {
+/**
+ * IMPORTANT:
+ * Sportsbook transaction histories naturally contain:
+ * - negative balances
+ * - withdrawals
+ * - wager deductions
+ * - payout fluctuations
+ *
+ * These should NOT be treated as fraud.
+ *
+ * Only absurd sportsbook values should generate a low informational note.
+ */
+function ruleImpossibleAmount(
+  e: OcrStructuredData,
+  out: FraudSignalInput[]
+): void {
   const amounts = e.generic_entities?.amounts ?? []
+
   const suspicious: string[] = []
+
+  const sportsbookTypes = [
+    'sportsbook_screenshot',
+    'sportsbook_transaction_history',
+    'betting_slip',
+  ]
+
+  const isSportsbook =
+    sportsbookTypes.includes(e.document_type)
 
   for (const raw of amounts) {
     const n = parseAmount(raw)
+
     if (isNaN(n)) continue
-    if (n < 0 || n > 1_000_000) suspicious.push(raw)
-    else if (n > 50_000)       suspicious.push(raw)
+
+    // ─────────────────────────────────────────────
+    // Sportsbook documents
+    // ─────────────────────────────────────────────
+    if (isSportsbook) {
+      // Only absurd sportsbook values should trigger
+      // an informational review note.
+      if (Math.abs(n) > 1_000_000) {
+        suspicious.push(raw)
+      }
+
+      continue
+    }
+
+    // ─────────────────────────────────────────────
+    // Non-sportsbook documents
+    // ─────────────────────────────────────────────
+    if (n < 0 || Math.abs(n) > 500_000) {
+      suspicious.push(raw)
+    }
   }
 
   if (suspicious.length === 0) return
 
-  // Determine severity: > $1M = critical, > $50k = high
-  const hasExtreme = amounts.some(a => { const n = parseAmount(a); return !isNaN(n) && (n < 0 || n > 1_000_000) })
-  const severity: FraudSeverity = hasExtreme ? 'critical' : 'high'
-
   out.push({
-    signal_type: 'impossible_amount',
-    severity,
-    confidence:  80,
-    title:       'Suspicious Amount Value',
-    description: `Detected amount(s) that appear abnormally large or negative: ${suspicious.slice(0, 3).join(', ')}. Verify against campaign limits.`,
-    metadata:    { amounts: suspicious },
+    signal_type: isSportsbook
+      ? 'transaction_pattern'
+      : 'impossible_amount',
+
+    severity: isSportsbook
+      ? 'low'
+      : 'medium',
+
+    confidence: isSportsbook
+      ? 45
+      : 72,
+
+    title: isSportsbook
+      ? 'Transaction Pattern Note'
+      : 'Unusual Amount Value',
+
+    description: isSportsbook
+      ? `Large debit/credit fluctuations detected (${suspicious
+          .slice(0, 3)
+          .join(', ')}). These are commonly seen in sportsbook transaction histories and are not inherently suspicious.`
+      : `Detected amount(s) that are unusually large or negative: ${suspicious
+          .slice(0, 3)
+          .join(', ')}. Review for context.`,
+
+    metadata: {
+      amounts: suspicious,
+      sportsbook_context: isSportsbook,
+    },
   })
 }
 
-function ruleSuspiciousCurrencyFormat(e: OcrStructuredData, out: FraudSignalInput[]): void {
+function ruleSuspiciousCurrencyFormat(
+  e: OcrStructuredData,
+  out: FraudSignalInput[]
+): void {
   const amounts = e.generic_entities?.amounts ?? []
-  // Flag amounts with repeated currency symbols or characters outside normal currency notation
-  const odd = amounts.filter(a =>
-    /\$.*\$|€.*€|£.*£/.test(a) ||  // repeated symbol
-    /[^0-9\s\.,\$€£¥₹₩\+\-\/]/u.test(a)  // unexpected non-numeric char
+
+  const odd = amounts.filter(
+    a =>
+      /\$.*\$|€.*€|£.*£/.test(a) ||
+      /[^0-9\s\.,\$€£¥₹₩\+\-\/]/u.test(a)
   )
+
   if (odd.length === 0) return
+
   out.push({
     signal_type: 'suspicious_currency_format',
-    severity:    'medium',
-    confidence:  68,
-    title:       'Unusual Currency Formatting',
-    description: `Amount(s) with irregular currency notation detected: ${odd.slice(0, 2).join(', ')}. May indicate OCR error or document manipulation.`,
-    metadata:    { amounts: odd },
+    severity: 'low',
+    confidence: 65,
+    title: 'Unusual Currency Notation',
+    description: `Amount(s) with irregular notation detected: ${odd
+      .slice(0, 2)
+      .join(', ')}. May indicate OCR misread rather than manipulation.`,
+    metadata: { amounts: odd },
   })
 }
 
-function ruleInvalidDateFormat(e: OcrStructuredData, out: FraudSignalInput[]): void {
+function ruleInvalidDateFormat(
+  e: OcrStructuredData,
+  out: FraudSignalInput[]
+): void {
   const dates = e.generic_entities?.dates ?? []
-  const invalid = dates.filter(d => !isRecognisedDate(d))
+
+  const invalid = dates.filter(
+    d => !isRecognisedDate(d)
+  )
+
   if (invalid.length === 0) return
+
   out.push({
     signal_type: 'invalid_date_format',
-    severity:    'medium',
-    confidence:  72,
-    title:       'Unrecognised Date Format',
-    description: `${invalid.length} date string(s) could not be parsed as valid dates: ${invalid.slice(0, 2).join(', ')}. May indicate OCR misread or manipulated text.`,
-    metadata:    { invalid_dates: invalid },
+    severity: 'low',
+    confidence: 65,
+    title: 'Unrecognised Date Format',
+    description: `${invalid.length} date string(s) could not be parsed: ${invalid
+      .slice(0, 2)
+      .join(', ')}. Likely an OCR artefact or non-standard date locale.`,
+    metadata: { invalid_dates: invalid },
   })
 }
 
-function ruleCroppedScreenshot(e: OcrStructuredData, out: FraudSignalInput[]): void {
-  const cropNotes = e.confidence_notes.filter(mentionsCrop)
+function ruleCroppedScreenshot(
+  e: OcrStructuredData,
+  out: FraudSignalInput[]
+): void {
+  const cropNotes = e.confidence_notes.filter(
+    mentionsCrop
+  )
+
   if (cropNotes.length === 0) return
+
   out.push({
     signal_type: 'cropped_screenshot',
-    severity:    'medium',
-    confidence:  78,
-    title:       'Screenshot Appears Cropped',
-    description: `The screenshot may have important information cut off: "${cropNotes[0]}". A deliberately cropped submission can conceal disqualifying content.`,
-    metadata:    { notes: cropNotes },
+    severity: 'low',
+    confidence: 72,
+    title: 'Screenshot May Be Cropped',
+    description: `Partial content detected at document edges: "${cropNotes[0]}". This is common for mobile screenshots and does not by itself indicate manipulation.`,
+    metadata: { notes: cropNotes },
   })
 }
 
-function ruleInconsistentOddsFormat(e: OcrStructuredData, out: FraudSignalInput[]): void {
-  if (e.document_type !== 'sportsbook_screenshot' && e.document_type !== 'betting_slip') return
-  const odds = e.document_specific_data?.odds ?? null
+function ruleInconsistentOddsFormat(
+  e: OcrStructuredData,
+  out: FraudSignalInput[]
+): void {
+  const sportsbookTypes = [
+    'sportsbook_screenshot',
+    'sportsbook_transaction_history',
+    'betting_slip',
+  ]
+
+  if (!sportsbookTypes.includes(e.document_type))
+    return
+
+  const odds =
+    e.document_specific_data?.odds ?? null
+
   if (!odds || odds === 'null') return
 
   const t = odds.trim()
-  const isAmerican   = /^[+\-]\d{2,4}$/.test(t)
-  const isDecimal    = /^\d{1,3}\.\d{1,3}$/.test(t)
-  const isFractional = /^\d+\/\d+$/.test(t)
 
-  if (isAmerican || isDecimal || isFractional) return
+  const isAmerican =
+    /^[+\-]\d{2,4}$/.test(t)
+
+  const isDecimal =
+    /^\d{1,3}\.\d{1,3}$/.test(t)
+
+  const isFractional =
+    /^\d+\/\d+$/.test(t)
+
+  if (
+    isAmerican ||
+    isDecimal ||
+    isFractional
+  ) {
+    return
+  }
 
   out.push({
     signal_type: 'inconsistent_odds_format',
-    severity:    'medium',
-    confidence:  70,
-    title:       'Non-standard Odds Format',
-    description: `Odds value "${t}" does not match American (+150), decimal (1.50), or fractional (3/2) formats. May indicate an edited or non-genuine screenshot.`,
-    metadata:    { odds: t },
+    severity: 'low',
+    confidence: 65,
+    title: 'Non-standard Odds Format',
+    description: `Odds value "${t}" does not match recognised formats (American +150, decimal 1.50, fractional 3/2). May be OCR misread or a non-standard display.`,
+    metadata: { odds: t },
   })
 }
 
-function ruleSuspiciousFormatting(e: OcrStructuredData, out: FraudSignalInput[]): void {
+function ruleSuspiciousFormatting(
+  e: OcrStructuredData,
+  out: FraudSignalInput[]
+): void {
   const indicators = e.suspicious_indicators
+
   if (indicators.length === 0) return
 
-  const severity: FraudSeverity = indicators.length >= 3 ? 'high' : 'medium'
-  const sample = indicators.slice(0, 2).join('; ')
+  if (indicators.length < 2) return
+
+  const sample = indicators
+    .slice(0, 2)
+    .join('; ')
 
   out.push({
     signal_type: 'suspicious_formatting',
-    severity,
-    confidence:  76,
-    title:       `${indicators.length} Suspicious Indicator${indicators.length !== 1 ? 's' : ''} Detected`,
-    description: `The AI extraction engine identified formatting anomalies: ${sample}${indicators.length > 2 ? ` (+${indicators.length - 2} more)` : ''}.`,
-    metadata:    { indicators, count: indicators.length },
+    severity: 'medium',
+    confidence: 70,
+    title: `${indicators.length} Formatting Anomal${
+      indicators.length !== 1 ? 'ies' : 'y'
+    } Detected`,
+    description: `The extraction engine noted potential formatting irregularities: ${sample}${
+      indicators.length > 2
+        ? ` (+${indicators.length - 2} more)`
+        : ''
+    }. Human review recommended to assess significance.`,
+    metadata: {
+      indicators,
+      count: indicators.length,
+    },
   })
 }
 
@@ -312,10 +512,12 @@ function ruleSuspiciousFormatting(e: OcrStructuredData, out: FraudSignalInput[])
 /**
  * Generate deterministic fraud signals from a parsed OCR extraction.
  *
- * The function is intentionally lenient: it never throws.  Malformed or
- * absent fields produce no signal rather than an exception.
+ * The function is intentionally lenient:
+ * it never throws.
  */
-export function generateFraudSignals(extraction: OcrStructuredData): FraudSignalInput[] {
+export function generateFraudSignals(
+  extraction: OcrStructuredData
+): FraudSignalInput[] {
   const signals: FraudSignalInput[] = []
 
   // OCR Quality

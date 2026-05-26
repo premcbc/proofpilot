@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { Database, FraudAlert } from '@/lib/supabase/types'
+import type { Database } from '@/lib/supabase/types'
 
 export interface FraudAlertItem {
   id: string
@@ -28,13 +28,31 @@ export interface FraudPageStats {
   criticalCount: number
 }
 
+type FraudAlertRow = {
+  id: string
+  title: string
+  description: string | null
+  severity: string
+  created_at: string
+}
+
 function timeAgo(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime()
+
   const mins = Math.floor(diff / 60000)
+
   if (mins < 1) return 'just now'
-  if (mins < 60) return `${mins}m ago`
+
+  if (mins < 60) {
+    return `${mins}m ago`
+  }
+
   const hrs = Math.floor(mins / 60)
-  if (hrs < 24) return `${hrs}h ago`
+
+  if (hrs < 24) {
+    return `${hrs}h ago`
+  }
+
   return `${Math.floor(hrs / 24)}d ago`
 }
 
@@ -46,10 +64,13 @@ function normalizeSeverity(s: string): string {
     low: 'Low',
     none: 'None',
   }
+
   return map[s.toLowerCase()] ?? s
 }
 
-function toAlertItem(a: FraudAlert): FraudAlertItem {
+function toAlertItem(
+  a: FraudAlertRow
+): FraudAlertItem {
   return {
     id: a.id,
     type: a.title,
@@ -73,13 +94,22 @@ export async function getFraudAlerts(
   try {
     const { data, error } = await supabase
       .from('fraud_alerts')
-      .select('id, title, description, severity, status, created_at, updated_at, organization_id, review_id, signal_id, assigned_to, acknowledged_by, acknowledged_at, resolved_by, resolved_at, metadata')
+      .select(
+        'id, title, description, severity, created_at'
+      )
       .eq('organization_id', orgId)
-      .order('created_at', { ascending: false })
+      .order('created_at', {
+        ascending: false,
+      })
       .limit(limit)
 
-    if (error || !data) return []
-    return (data as FraudAlert[]).map(toAlertItem)
+    if (error || !data) {
+      return []
+    }
+
+    return (
+      data as FraudAlertRow[]
+    ).map(toAlertItem)
   } catch {
     return []
   }
@@ -105,30 +135,61 @@ export async function getFraudPageStats(
     rulesActive: '—',
     criticalCount: 0,
   }
-  if (!orgId) return defaults
+
+  if (!orgId) {
+    return defaults
+  }
 
   try {
     const today = new Date()
+
     today.setHours(0, 0, 0, 0)
 
-    const [blockedRes, alertsRes] = await Promise.all([
-      supabase
-        .from('reviews')
-        .select('id', { count: 'exact', head: true })
-        .eq('organization_id', orgId)
-        .in('status', ['flagged', 'rejected'])
-        .gte('created_at', today.toISOString()),
+    const [blockedRes, alertsRes] =
+      await Promise.all([
+        supabase
+          .from('reviews')
+          .select('id', {
+            count: 'exact',
+            head: true,
+          })
+          .eq('organization_id', orgId)
+          .in('status', [
+            'flagged',
+            'rejected',
+          ])
+          .gte(
+            'created_at',
+            today.toISOString()
+          ),
 
-      supabase
-        .from('fraud_alerts')
-        .select('severity')
-        .eq('organization_id', orgId)
-        .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()),
-    ])
+        supabase
+          .from('fraud_alerts')
+          .select('severity')
+          .eq('organization_id', orgId)
+          .gte(
+            'created_at',
+            new Date(
+              Date.now() -
+                24 * 60 * 60 * 1000
+            ).toISOString()
+          ),
+      ])
 
-    const blockedToday = blockedRes.count ?? 0
-    const alerts = (alertsRes.data ?? []) as Array<{ severity: string }>
-    const criticalCount = alerts.filter((a) => a.severity.toLowerCase() === 'critical').length
+    const blockedToday =
+      blockedRes.count ?? 0
+
+    const alerts = (
+      alertsRes.data ?? []
+    ) as Array<{
+      severity: string
+    }>
+
+    const criticalCount = alerts.filter(
+      (a) =>
+        a.severity.toLowerCase() ===
+        'critical'
+    ).length
 
     return {
       blockedToday,

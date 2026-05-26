@@ -39,6 +39,20 @@ export type EnqueueOcrJobResult =
   | { success: true;  jobId: string; deduplicated: boolean }
   | { success: false; error: string }
 
+/**
+ * Optional metadata for the ocr_jobs row.
+ *
+ * triggeredBy      — user UUID for manual re-runs; null for automatic triggers.
+ * reprocessReason  — short description, e.g. "initial_upload" | "manual_rerun"
+ *                    | free-text reviewer note.
+ * pipelineVersion  — identifies the OCR pipeline version in use.
+ */
+export interface EnqueueOcrJobOptions {
+  triggeredBy?:     string | null
+  reprocessReason?: string | null
+  pipelineVersion?: string | null
+}
+
 // ─── Internal row shape returned by Supabase selects ─────────────────────────
 // Typed explicitly to avoid propagating 'any' through the logic.
 
@@ -84,8 +98,14 @@ function rowToSummary(row: OcrJobRow): OcrJobSummary {
  * Idempotent: if a pending or processing job already exists for this review,
  * returns that job's ID without creating a duplicate.  This prevents a user
  * double-clicking "Run OCR" from spawning two concurrent jobs.
+ *
+ * Pass `opts.triggeredBy` + `opts.reprocessReason` for manual re-runs so the
+ * job row carries a full audit trail.
  */
-export async function enqueueOcrJob(reviewId: string): Promise<EnqueueOcrJobResult> {
+export async function enqueueOcrJob(
+  reviewId: string,
+  opts: EnqueueOcrJobOptions = {}
+): Promise<EnqueueOcrJobResult> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const supabase   = (await createClient()) as any
   const membership = await getCurrentMembership(supabase)
@@ -97,6 +117,9 @@ export async function enqueueOcrJob(reviewId: string): Promise<EnqueueOcrJobResu
   const orgId = membership.organization_id as string
 
   // ── Deduplication check ─────────────────────────────────────────────────────
+  // Block if a job is already in-flight (pending or processing).
+  // This guard applies to both initial triggers and manual re-runs: we never
+  // want two concurrent workers running on the same review.
   const { data: existing } = await supabase
     .from('ocr_jobs')
     .select('id, status')
@@ -118,12 +141,15 @@ export async function enqueueOcrJob(reviewId: string): Promise<EnqueueOcrJobResu
   const { data, error } = await supabase
     .from('ocr_jobs')
     .insert({
-      organization_id: orgId,
-      review_id:       reviewId,
-      status:          'pending',
-      attempts:        0,
-      max_attempts:    3,
-      priority:        0,
+      organization_id:  orgId,
+      review_id:        reviewId,
+      status:           'pending',
+      attempts:         0,
+      max_attempts:     3,
+      priority:         0,
+      triggered_by:     opts.triggeredBy    ?? null,
+      reprocess_reason: opts.reprocessReason ?? 'initial_upload',
+      pipeline_version: opts.pipelineVersion ?? null,
     })
     .select('id')
     .single() as { data: { id: string } | null; error: { message: string; code: string } | null }
@@ -134,7 +160,10 @@ export async function enqueueOcrJob(reviewId: string): Promise<EnqueueOcrJobResu
     return { success: false, error: msg }
   }
 
-  console.log('[enqueueOcrJob] job created | jobId:', data.id, '| reviewId:', reviewId)
+  console.log('[enqueueOcrJob] job created',
+    '| jobId:', data.id,
+    '| reviewId:', reviewId,
+    '| reason:', opts.reprocessReason ?? 'initial_upload')
   return { success: true, jobId: data.id, deduplicated: false }
 }
 

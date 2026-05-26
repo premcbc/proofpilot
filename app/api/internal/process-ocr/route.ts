@@ -1,88 +1,157 @@
-/**
- * Internal OCR worker route — POST /api/internal/process-ocr
- *
- * Triggered by the client immediately after enqueueOcrJob() succeeds.
- * Claims the next pending job (optionally filtered by reviewId), runs the
- * full OCR pipeline, then marks the job completed or failed.
- *
- * This is a temporary synchronous worker.  Replace the body of this route
- * with a Trigger.dev / Inngest event emit or BullMQ push when ready — the
- * queue module (lib/actions/ocr-queue.ts) is unchanged.
- *
- * Security: this route is intentionally not protected by auth because the
- * claim is idempotent and guarded by RLS on the ocr_jobs table (org-scoped).
- * In production, add an INTERNAL_SECRET header check or move to a service worker.
- */
-
-import { NextRequest, NextResponse } from 'next/server'
-import { claimNextPendingOcrJob, completeOcrJob, failOcrJob } from '@/lib/actions/ocr-queue'
+import { NextResponse } from 'next/server'
+import { createClient } from '@/lib/supabase/server'
+import { claimNextOcrJob } from '@/lib/ocr/claim-next-job'
 import { runReviewOCR } from '@/lib/actions/ocr'
 
-export async function POST(req: NextRequest): Promise<NextResponse> {
-  // ── Parse optional reviewId from body ──────────────────────────────────────
-  let reviewId: string | undefined
-  try {
-    const body = await req.json() as { reviewId?: unknown }
-    reviewId = typeof body.reviewId === 'string' && body.reviewId.trim()
-      ? body.reviewId.trim()
-      : undefined
-  } catch {
-    // Body absent or malformed — treat as unconstrained claim
-    reviewId = undefined
-  }
+const MAX_JOBS_PER_RUN = 3
 
-  console.log('[process-ocr] worker invoked | reviewId filter:', reviewId ?? 'none')
+export async function POST(): Promise<NextResponse> {
+  console.log('[process-ocr] worker started')
 
-  // ── Claim next pending job ─────────────────────────────────────────────────
-  const job = await claimNextPendingOcrJob(reviewId)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const supabase = (await createClient()) as any
 
-  if (!job) {
-    console.log('[process-ocr] no pending job found | reviewId:', reviewId ?? 'any')
-    return NextResponse.json({ ok: true, claimed: false }, { status: 200 })
-  }
+  const processed: Array<{
+    jobId: string
+    success: boolean
+    error?: string
+  }> = []
 
-  console.log('[process-ocr] claimed job',
-    '| jobId:', job.id,
-    '| reviewId:', job.reviewId,
-    '| attempt:', job.attempts)
+  for (let i = 0; i < MAX_JOBS_PER_RUN; i++) {
+    // ── Claim next job ─────────────────────────────────────────────────────
+    const job = await claimNextOcrJob(supabase)
 
-  // ── Run OCR pipeline ───────────────────────────────────────────────────────
-  // runReviewOCR expects the reviews.id (UUID), not the ocr_jobs.id.
-  // job.reviewId is the FK set when the job was enqueued.
-  const start = Date.now()
-  try {
-    const result = await runReviewOCR(job.reviewId)
+    if (!job) {
+      console.log(
+        '[process-ocr] no more pending jobs'
+      )
 
-    if (result.success) {
-      const ms = Date.now() - start
-      await completeOcrJob(job.id)
-      console.log('[process-ocr] OCR completed',
-        '| jobId:', job.id,
-        '| extractionId:', result.extractionId,
-        '| document_type:', result.structuredData?.document_type ?? 'null',
-        '| quality_score:', result.structuredData?.extraction_quality_score ?? 'null',
-        '| ms:', ms)
-      return NextResponse.json({ ok: true, claimed: true, jobId: job.id, extractionId: result.extractionId }, { status: 200 })
+      break
     }
 
-    // Soft failure — OCR ran but returned an error
-    const ms = Date.now() - start
-    await failOcrJob(job.id, result.error)
-    console.error('[process-ocr] OCR failed (soft)',
-      '| jobId:', job.id,
-      '| error:', result.error,
-      '| ms:', ms)
-    return NextResponse.json({ ok: false, claimed: true, jobId: job.id, error: result.error }, { status: 200 })
+    console.log(
+      '[process-ocr] processing job',
+      '| jobId:',
+      job.id,
+      '| reviewId:',
+      job.review_id,
+      '| attempt:',
+      job.attempts
+    )
 
-  } catch (err) {
-    // Hard failure — unexpected exception
-    const ms  = Date.now() - start
-    const msg = err instanceof Error ? err.message : String(err)
-    await failOcrJob(job.id, msg)
-    console.error('[process-ocr] OCR failed (exception)',
-      '| jobId:', job.id,
-      '| error:', msg,
-      '| ms:', ms)
-    return NextResponse.json({ ok: false, claimed: true, jobId: job.id, error: msg }, { status: 500 })
+    try {
+      // ── Execute OCR pipeline ────────────────────────────────────────────
+      const result = await runReviewOCR(job.review_id)
+
+      if (result.success) {
+        // ── Mark completed ────────────────────────────────────────────────
+        const { error: completeError } = await supabase
+          .from('ocr_jobs')
+          .update({
+            status: 'completed',
+            completed_at: new Date().toISOString(),
+            error_message: null,
+          })
+          .eq('id', job.id)
+
+        if (completeError) {
+          console.error(
+            '[process-ocr] failed marking completed:',
+            completeError.message
+          )
+        }
+
+        console.log(
+          '[process-ocr] OCR completed',
+          '| jobId:',
+          job.id,
+          '| extractionId:',
+          result.extractionId,
+          '| confidence:',
+          result.confidence
+        )
+
+        processed.push({
+          jobId: job.id,
+          success: true,
+        })
+      } else {
+        // ── Mark failed ───────────────────────────────────────────────────
+        const { error: failError } = await supabase
+          .from('ocr_jobs')
+          .update({
+            status: 'failed',
+            completed_at: new Date().toISOString(),
+            error_message: result.error,
+          })
+          .eq('id', job.id)
+
+        if (failError) {
+          console.error(
+            '[process-ocr] failed marking failed:',
+            failError.message
+          )
+        }
+
+        console.error(
+          '[process-ocr] OCR failed',
+          '| jobId:',
+          job.id,
+          '| error:',
+          result.error
+        )
+
+        processed.push({
+          jobId: job.id,
+          success: false,
+          error: result.error,
+        })
+      }
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : String(err)
+
+      // ── Hard-failure recovery ───────────────────────────────────────────
+      const { error: failError } = await supabase
+        .from('ocr_jobs')
+        .update({
+          status: 'failed',
+          completed_at: new Date().toISOString(),
+          error_message: msg,
+        })
+        .eq('id', job.id)
+
+      if (failError) {
+        console.error(
+          '[process-ocr] failed marking exception:',
+          failError.message
+        )
+      }
+
+      console.error(
+        '[process-ocr] worker exception',
+        '| jobId:',
+        job.id,
+        '| error:',
+        msg
+      )
+
+      processed.push({
+        jobId: job.id,
+        success: false,
+        error: msg,
+      })
+    }
   }
+
+  console.log(
+    '[process-ocr] worker completed',
+    '| processed:',
+    processed.length
+  )
+
+  return NextResponse.json({
+    ok: true,
+    processed,
+  })
 }

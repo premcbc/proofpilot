@@ -4,24 +4,39 @@
  * computeReviewRiskScore: derives a 0–100 score from a set of fraud signals.
  * computeRiskLevel:       maps a score to a named risk tier.
  *
- * Scoring model
- * ─────────────
+ * Scoring model v2
+ * ────────────────
  * Each signal contributes weight × (confidence / 100) points.
+ *
  * Weights per severity:
- *   low      → 10
- *   medium   → 25
- *   high     → 50
- *   critical → 80
+ *   low      →  5   (quality issues: blur, crop, missing fields)
+ *   medium   → 18   (suspicious but contextual: unusual amounts, formatting)
+ *   high     → 45   (fraud indicators: duplicates, structural forgery)
+ *   critical → 85   (reserved for future definitive fraud signals)
  *
- * Rationale: a single high-confidence critical signal (80 × 1.0 = 80) pushes
- * the review into a near-critical tier.  Multiple medium signals compound
- * additively.  Scores are clamped to [0, 100].
+ * Quality-only cap
+ * ────────────────
+ * If ALL signals in a set are LOW severity (document quality / legibility
+ * issues), the score is capped at MAX_QUALITY_SCORE (35).  This prevents
+ * a noisy extraction — partial crop, some unreadable regions, a few missing
+ * fields — from producing an alarming HIGH or CRITICAL risk rating when
+ * there is no actual fraud indicator present.
  *
- * This is a v1 scoring model.  Future iterations can introduce:
- *   - Per-signal-type weights
- *   - Diminishing returns per severity tier
- *   - Campaign-context modifiers (e.g. expected max amount)
- *   - Temporal signals (account age, submission velocity)
+ * A quality-only set of 13 signals at 100% confidence: 13 × 5 = 65 raw →
+ * capped at 35 → MEDIUM risk at most.  In practice 3–5 quality signals
+ * at ~85% confidence land at LOW (≈13).
+ *
+ * Threshold mapping
+ * ─────────────────
+ *   0–20   → low
+ *   21–50  → medium
+ *   51–80  → high
+ *   81–100 → critical
+ *
+ * CRITICAL requires either a HIGH-severity signal (raw ≥ 45) combined with
+ * other signals, or two HIGH signals together (45 + 45 × conf ≥ 81).
+ * LOW-only signals can never produce CRITICAL (score capped at 35).
+ * LOW-only signals can never exceed score 60 (capped at 35 < 60). ✓
  */
 
 import type { FraudSignalInput, FraudSeverity } from '@/lib/fraud/types'
@@ -29,11 +44,17 @@ import type { FraudSignalInput, FraudSeverity } from '@/lib/fraud/types'
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const SEVERITY_WEIGHT: Record<FraudSeverity, number> = {
-  low:      10,
-  medium:   25,
-  high:     50,
-  critical: 80,
+  low:      5,
+  medium:   18,
+  high:     45,
+  critical: 85,
 }
+
+/**
+ * Maximum score when ALL signals are quality/legibility issues (LOW severity).
+ * Maps to MEDIUM risk — warrants attention but is not alarming.
+ */
+const MAX_QUALITY_SCORE = 35
 
 // ─── Exports ──────────────────────────────────────────────────────────────────
 
@@ -50,7 +71,15 @@ export function computeReviewRiskScore(signals: FraudSignalInput[]): number {
     return acc + weight * factor
   }, 0)
 
-  return Math.max(0, Math.min(100, Math.round(raw)))
+  const clamped = Math.max(0, Math.min(100, Math.round(raw)))
+
+  // Quality-only cap: document capture / legibility issues alone should not
+  // produce a HIGH or CRITICAL risk rating.
+  if (signals.every(s => s.severity === 'low')) {
+    return Math.min(clamped, MAX_QUALITY_SCORE)
+  }
+
+  return clamped
 }
 
 /**

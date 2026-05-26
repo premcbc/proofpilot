@@ -1,12 +1,13 @@
 'use client'
 
-import { useState, useEffect, useCallback, useTransition } from 'react'
+import { useState, useEffect, useCallback, useTransition, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { triggerReviewOCR } from '@/app/actions/run-ocr'
+import { triggerReviewOCR, rerunReviewOCR } from '@/app/actions/run-ocr'
+import { submitReviewDecision, reopenReview } from '@/app/actions/review-decision'
 import { motion, AnimatePresence, useMotionValue, animate } from 'framer-motion'
 import {
-  type ReviewDetail as ReviewDetailType,
+  type ReviewDetailType,
   type AuditEntry,
   type ReviewFraudCheck,
   type OcrExtraction,
@@ -16,15 +17,33 @@ import {
   type OcrTimelineStatus,
   buildOcrTimeline,
 } from '@/lib/review-data'
-import type { FraudAnalysisSummary, FraudSignalView, FraudSeverity } from '@/lib/fraud/types'
+
+import type {
+  FraudAnalysisSummary,
+  FraudSignalView,
+  FraudSeverity,
+} from '@/lib/fraud/types'
+
+import { AiCopilotCard } from '@/components/review/ai-copilot-card'
+
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { StatusBadge } from '@/components/ui/badge'
+
 import {
-  IconChevronLeft, IconDownload, IconMoreHorizontal,
-  IconCheckCircle, IconXCircle, IconAlertTriangle,
-  IconActivity, IconCheck, IconArrowUpRight,
-  IconUser, IconShieldAlert, IconEye, IconRefresh,
+  IconChevronLeft,
+  IconDownload,
+  IconMoreHorizontal,
+  IconCheckCircle,
+  IconXCircle,
+  IconAlertTriangle,
+  IconActivity,
+  IconCheck,
+  IconArrowUpRight,
+  IconUser,
+  IconShieldAlert,
+  IconEye,
+  IconRefresh,
 } from '@/components/icons'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -41,7 +60,28 @@ function nowTimeStr() {
     .join(':')
 }
 
-function aiRec(confidence: number): DecisionType {
+/** Format an ISO 8601 timestamp as HH:MM:SS UTC for the decision result card. */
+function fmtDecisionTime(iso: string): string {
+  try {
+    const d = new Date(iso)
+    return [d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds()]
+      .map(v => String(v).padStart(2, '0'))
+      .join(':')
+  } catch {
+    return '--:--:--'
+  }
+}
+
+/** Map a review_status string to a DecisionType, or null when undecided. */
+function statusToDecision(status: string): DecisionType | null {
+  if (status === 'approved')  return 'approved'
+  if (status === 'rejected')  return 'rejected'
+  if (status === 'escalated') return 'escalated'
+  return null
+}
+
+/** Derive a recommendation from raw confidence when no AI analysis is available. */
+function aiRecFromConfidence(confidence: number): DecisionType {
   if (confidence >= 80) return 'approved'
   if (confidence >= 50) return 'escalated'
   return 'rejected'
@@ -639,6 +679,8 @@ interface OcrExtractionCardProps {
   ocrExtraction?: OcrExtraction | null
   /** Callback to trigger OCR — undefined for demo reviews that have no DB row */
   onTriggerOcr?: () => void
+  /** Callback to manually re-run OCR after a completed extraction */
+  onRerunOcr?: () => void
   /** True while useTransition is pending (button is disabled, card shows spinner) */
   isTriggering?: boolean
   /** Client-side error from the server action (shown until page refreshes) */
@@ -650,6 +692,7 @@ interface OcrExtractionCardProps {
 function OcrExtractionCard({
   ocrExtraction,
   onTriggerOcr,
+  onRerunOcr,
   isTriggering = false,
   ocrError,
   latestOcrJob,
@@ -832,10 +875,36 @@ function OcrExtractionCard({
               {ocrExtraction!.engine && (
                 <MetaChip label="Engine"     value={ocrExtraction!.engine} />
               )}
+              {/* Ingestion strategy chip — shows how the document was processed */}
+              {ocrExtraction!.ingestionStrategy && (
+                <MetaChip
+                  label="Method"
+                  value={
+                    ocrExtraction!.ingestionStrategy === 'direct_vision'   ? 'Image OCR'
+                    : ocrExtraction!.ingestionStrategy === 'text_extraction' ? 'PDF Text'
+                    : 'PDF Scan'
+                  }
+                />
+              )}
+              {/* Page count — only meaningful for multi-page PDFs */}
+              {ocrExtraction!.pageCount != null && ocrExtraction!.pageCount > 1 && (
+                <MetaChip label="Pages" value={String(ocrExtraction!.pageCount)} />
+              )}
               {ocrExtraction!.processingMs !== null && (
                 <MetaChip label="Time"       value={`${ocrExtraction!.processingMs} ms`} />
               )}
               <MetaChip label="Extracted"  value={fmtTs(ocrExtraction!.extractedAt)} />
+              {onRerunOcr && (
+                <button
+                  type="button"
+                  onClick={onRerunOcr}
+                  disabled={isTriggering_}
+                  className="ml-auto flex items-center gap-1.5 text-[10px] font-medium text-slate-400 hover:text-slate-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  <IconRefresh className={`w-3 h-3 ${isTriggering_ ? 'animate-spin' : ''}`} />
+                  Re-run OCR
+                </button>
+              )}
             </div>
 
             {/* 7-section structured display */}
@@ -1079,11 +1148,19 @@ function FraudChecksCard({ checks }: { checks: ReviewFraudCheck[] }) {
 }
 
 // ─── Confidence gauge ────────────────────────────────────────────────────────
+//
+// arcColor uses indigo/violet tones — NOT the human-decision palette
+// (emerald/amber/red).  The arc communicates confidence *level* via luminance
+// only (brighter = more certain), never implying approval or rejection.
+//
+//   ≥ 80 % — indigo-400  (#818cf8): bright, high certainty
+//   ≥ 50 % — indigo-500  (#6366f1): medium certainty
+//   < 50 % — violet-400  (#a78bfa): muted, low certainty
 
 function arcColor(v: number) {
-  if (v >= 80) return '#34d399'
-  if (v >= 50) return '#fbbf24'
-  return '#f87171'
+  if (v >= 80) return '#818cf8'   // indigo-400 — high confidence
+  if (v >= 50) return '#6366f1'   // indigo-500 — medium confidence
+  return '#a78bfa'                // violet-400 — low confidence
 }
 
 function riskLabel(score: number) {
@@ -1114,7 +1191,7 @@ function ConfidenceCard({ confidence, riskScore }: { confidence: number; riskSco
   return (
     <Card padding="none">
       <div className="flex items-center gap-2.5 px-4 py-3 border-b border-slate-800/60">
-        <div className="flex h-6 w-6 items-center justify-center rounded-md bg-amber-500/10 text-amber-400">
+        <div className="flex h-6 w-6 items-center justify-center rounded-md bg-indigo-500/10 text-indigo-400">
           <svg className="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
             <path d="M9 12.75L11.25 15 15 9.75M21 12c0 1.268-.63 2.39-1.593 3.068a3.745 3.745 0 01-1.043 3.296 3.745 3.745 0 01-3.296 1.043A3.745 3.745 0 0112 21c-1.268 0-2.39-.63-3.068-1.593a3.745 3.745 0 01-3.296-1.043 3.745 3.745 0 01-1.043-3.296A3.745 3.745 0 013 12c0-1.268.63-2.39 1.593-3.068a3.745 3.745 0 011.043-3.296 3.745 3.745 0 013.296-1.043A3.745 3.745 0 0112 3c1.268 0 2.39.63 3.068 1.593a3.745 3.745 0 013.296 1.043 3.745 3.745 0 011.043 3.296A3.745 3.745 0 0121 12z" />
           </svg>
@@ -1217,7 +1294,13 @@ interface DecisionCardProps {
   onApprove: () => void
   onEscalate: () => void
   onReject: () => void
-  onReopen: () => void
+  onReopen: (reason: string) => void
+  /** Real AI recommendation from review_ai_analysis. When present overrides confidence-derived recommendation. */
+  aiRecommendation?: string | null
+  /** Error message to display when a decision attempt fails (e.g. concurrent conflict). */
+  decisionError?: string | null
+  /** True when this is a DB-backed review (reopen requires a reason). */
+  requireReopenReason?: boolean
 }
 
 const RESULT_CFG = {
@@ -1249,14 +1332,41 @@ const RESULT_CFG = {
 
 function DecisionCard({
   riskScore, confidence, reviewerName, actionState, pendingDecision, finalDecision,
-  decisionTime, onApprove, onEscalate, onReject, onReopen,
+  decisionTime, onApprove, onEscalate, onReject, onReopen, aiRecommendation,
+  decisionError, requireReopenReason = false,
 }: DecisionCardProps) {
   const [shakeCard, setShakeCard] = useState(false)
   const isLoading = actionState === 'loading'
   const isDone = actionState === 'done'
 
-  const recommendation = aiRec(confidence)
-  const showOverride = finalDecision !== null && finalDecision !== recommendation
+  // ── Reopen reason flow ─────────────────────────────────────────────────────
+  // For DB-backed reviews, clicking "Reopen Review" shows a small inline form
+  // that requires a non-empty reason before confirming.
+  const [reopenPhase, setReopenPhase] = useState<'idle' | 'entering'>('idle')
+  const [reopenReason, setReopenReason] = useState('')
+
+  const handleReopenClick = () => {
+    if (!requireReopenReason) { onReopen(''); return }
+    setReopenPhase('entering')
+    setReopenReason('')
+  }
+  const handleReopenCancel  = () => setReopenPhase('idle')
+  const handleReopenConfirm = () => {
+    if (!reopenReason.trim()) return
+    setReopenPhase('idle')
+    onReopen(reopenReason.trim())
+  }
+
+  // Use the real AI recommendation when available; fall back to confidence-derived value.
+  // When there's no AI analysis at all (recommendation === null/undefined and confidence === 0),
+  // hasAiRec is false and the banner renders an "awaiting analysis" state.
+  const hasAiRec = !!aiRecommendation || confidence > 0
+  const recommendation: DecisionType =
+    aiRecommendation === 'approved' ? 'approved'
+    : aiRecommendation === 'rejected' ? 'rejected'
+    : aiRecommendation === 'escalated' ? 'escalated'
+    : aiRecFromConfidence(confidence)
+  const showOverride = finalDecision !== null && hasAiRec && finalDecision !== recommendation
 
   // Reset shake when action is re-opened so it can replay on subsequent reject
   useEffect(() => {
@@ -1333,36 +1443,89 @@ function DecisionCard({
               exit={{ opacity: 0, y: -8 }}
               transition={{ duration: 0.18 }}
             >
-              {/* AI recommendation banner */}
-              <div className={[
-                'rounded-lg border px-3 py-2.5 mb-4 flex items-center gap-2.5',
-                confidence >= 80 ? 'border-emerald-500/20 bg-emerald-500/5'
-                  : confidence >= 50 ? 'border-amber-500/20 bg-amber-500/5'
-                  : 'border-red-500/20 bg-red-500/5',
-              ].join(' ')}>
+              {/* AI recommendation banner
+                   ─ Indigo/purple = AI advisory (never authoritative)
+                   ─ Emerald/amber/red = human final decision only          */}
+              {hasAiRec ? (
                 <div className={[
-                  'shrink-0 w-6 h-6 rounded-full flex items-center justify-center',
-                  confidence >= 80 ? 'bg-emerald-500/15' : confidence >= 50 ? 'bg-amber-500/15' : 'bg-red-500/15',
+                  'rounded-lg border px-3 py-2.5 mb-4 flex items-center gap-2.5',
+                  finalDecision
+                    ? finalDecision === 'approved' ? 'border-emerald-500/20 bg-emerald-500/5'
+                      : finalDecision === 'escalated' ? 'border-amber-500/20 bg-amber-500/5'
+                      : 'border-red-500/20 bg-red-500/5'
+                    : 'border-indigo-500/25 bg-indigo-500/8',
                 ].join(' ')}>
-                  {confidence >= 80
-                    ? <IconCheckCircle className="w-3.5 h-3.5 text-emerald-400" />
-                    : <IconAlertTriangle className={`w-3.5 h-3.5 ${confidence >= 50 ? 'text-amber-400' : 'text-red-400'}`} />
-                  }
+                  <div className={[
+                    'shrink-0 w-6 h-6 rounded-full flex items-center justify-center',
+                    finalDecision
+                      ? finalDecision === 'approved' ? 'bg-emerald-500/15'
+                        : finalDecision === 'escalated' ? 'bg-amber-500/15'
+                        : 'bg-red-500/15'
+                      : 'bg-indigo-500/15',
+                  ].join(' ')}>
+                    {finalDecision
+                      ? finalDecision === 'approved'
+                        ? <IconCheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+                        : <IconAlertTriangle className={`w-3.5 h-3.5 ${finalDecision === 'escalated' ? 'text-amber-400' : 'text-red-400'}`} />
+                      : <IconActivity className="w-3.5 h-3.5 text-indigo-400" />
+                    }
+                  </div>
+                  <div>
+                    <div>
+  <p
+    className={`text-[11px] font-semibold ${
+      finalDecision
+        ? finalDecision === 'approved'
+          ? 'text-emerald-300'
+          : finalDecision === 'escalated'
+          ? 'text-amber-300'
+          : 'text-red-300'
+        : 'text-indigo-300'
+    }`}
+  >
+    {finalDecision
+      ? 'Reviewer Decision: '
+      : 'AI Copilot Suggestion: '}
+
+    {finalDecision
+      ? finalDecision === 'approved'
+        ? 'Approved'
+        : finalDecision === 'escalated'
+        ? 'Escalated'
+        : 'Rejected'
+      : recommendation === 'approved'
+      ? 'Recommends approving this submission'
+      : recommendation === 'escalated'
+      ? 'Recommends escalating for review'
+      : 'Recommends rejecting this submission'}
+  </p>
+
+  <p className="text-[10px] text-slate-500 mt-1">
+    {finalDecision
+      ? 'A reviewer has made the final decision for this submission.'
+      : confidence > 0
+      ? `${confidence}% confidence — advisory only, human decision required`
+      : 'AI copilot analysis complete — advisory only'}
+  </p>
+</div>
+
+                  </div>
                 </div>
-                <div>
-                  <p className={`text-[11px] font-semibold ${confidence >= 80 ? 'text-emerald-300' : confidence >= 50 ? 'text-amber-300' : 'text-red-300'}`}>
-                    AI Recommendation:{' '}
-                    {recommendation === 'approved' ? 'Approve' : recommendation === 'escalated' ? 'Escalate for Review' : 'Reject'}
-                  </p>
-                  <p className="text-[10px] text-slate-500 mt-0.5">
-                    {confidence >= 80
-                      ? `Confidence ${confidence}% — exceeds automated approval threshold`
-                      : confidence >= 50
-                      ? `Confidence ${confidence}% — below threshold, human review required`
-                      : `Confidence ${confidence}% — high fraud probability, rejection recommended`}
-                  </p>
+              ) : (
+                <div className="rounded-lg border border-slate-700/40 bg-slate-800/20 px-3 py-2.5 mb-4 flex items-center gap-2.5">
+                  <div className="shrink-0 w-6 h-6 rounded-full bg-slate-700/60 flex items-center justify-center">
+                    <svg className="w-3.5 h-3.5 text-slate-500 stroke-current fill-none" viewBox="0 0 24 24" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <p className="text-[11px] font-semibold text-slate-400">No AI Analysis Available</p>
+                    <p className="text-[10px] text-slate-600 mt-0.5">
+                      Run OCR to trigger automated fraud analysis and AI copilot recommendation.
+                    </p>
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* 3-button grid */}
               <div className="grid grid-cols-3 gap-3">
@@ -1398,6 +1561,22 @@ function DecisionCard({
                   </button>
                 ))}
               </div>
+
+              {/* Decision error banner — shown when backend rejects the attempt */}
+              <AnimatePresence>
+                {decisionError && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -6 }}
+                    transition={{ duration: 0.2 }}
+                    className="mt-3 rounded-lg border border-red-500/25 bg-red-500/8 px-3 py-2.5 flex items-start gap-2"
+                  >
+                    <IconAlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />
+                    <p className="text-[10px] text-red-300 leading-relaxed">{decisionError}</p>
+                  </motion.div>
+                )}
+              </AnimatePresence>
 
               <p className="mt-3 text-center text-[10px] text-slate-600">
                 All decisions are logged to the immutable audit trail
@@ -1499,16 +1678,48 @@ function DecisionCard({
                   </motion.div>
                 )}
 
-                {/* Reopen */}
+                {/* Reopen — with optional inline reason form for DB-backed reviews */}
                 <motion.div
                   initial={{ opacity: 0 }} animate={{ opacity: 1 }}
                   transition={{ duration: 0.3, delay: 0.5 }}
-                  className="flex justify-end pt-2 border-t border-slate-800/60"
+                  className="pt-2 border-t border-slate-800/60"
                 >
-                  <Button variant="ghost" size="sm" onClick={onReopen}>
-                    <IconRefresh className="w-3.5 h-3.5" />
-                    Reopen Review
-                  </Button>
+                  <AnimatePresence mode="wait">
+                    {reopenPhase === 'idle' ? (
+                      <motion.div key="reopen-btn" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex justify-end">
+                        <Button variant="ghost" size="sm" onClick={handleReopenClick}>
+                          <IconRefresh className="w-3.5 h-3.5" />
+                          Reopen Review
+                        </Button>
+                      </motion.div>
+                    ) : (
+                      <motion.div key="reopen-form" initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 4 }} transition={{ duration: 0.18 }} className="space-y-2">
+                        <p className="text-[10px] font-semibold text-slate-400">Reason for reopening</p>
+                        <textarea
+                          value={reopenReason}
+                          onChange={e => setReopenReason(e.target.value)}
+                          placeholder="Briefly describe why this review needs to be re-evaluated…"
+                          rows={2}
+                          className="w-full resize-none rounded-md border border-slate-700/60 bg-slate-800/60 px-3 py-2 text-[11px] text-slate-300 placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500/60"
+                          autoFocus
+                        />
+                        <div className="flex items-center justify-end gap-2">
+                          <button type="button" onClick={handleReopenCancel} className="text-[10px] text-slate-500 hover:text-slate-300 transition-colors px-2 py-1">
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleReopenConfirm}
+                            disabled={!reopenReason.trim()}
+                            className="inline-flex items-center gap-1.5 rounded-md bg-slate-700 px-3 py-1.5 text-[10px] font-semibold text-slate-200 hover:bg-slate-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                          >
+                            <IconRefresh className="w-3 h-3" />
+                            Confirm Reopen
+                          </button>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </motion.div>
               </motion.div>
             </motion.div>
@@ -1732,17 +1943,68 @@ function OcrTimelineCard({ history }: { history: OcrHistoryItem[] }) {
 export function ReviewDetail({ review }: { review: ReviewDetailType }) {
   const initialStatus = review.status.charAt(0).toUpperCase() + review.status.slice(1)
 
-  const [actionState, setActionState] = useState<ActionState>('idle')
+  // ── Derive initial decision state from the DB status ─────────────────────
+  // If the review was already decided before this page load, start in 'done'
+  // so the result card renders immediately without requiring a new decision.
+  const initialDecision = statusToDecision(review.status)
+  const initialDecisionTime = review.decidedAt ? fmtDecisionTime(review.decidedAt) : null
+
+  const [actionState, setActionState] = useState<ActionState>(initialDecision ? 'done' : 'idle')
   const [pendingDecision, setPendingDecision] = useState<DecisionType | null>(null)
-  const [finalDecision, setFinalDecision] = useState<DecisionType | null>(null)
-  const [decisionTime, setDecisionTime] = useState<string | null>(null)
+  const [finalDecision, setFinalDecision] = useState<DecisionType | null>(initialDecision)
+  const [decisionTime, setDecisionTime] = useState<string | null>(initialDecisionTime)
   const [currentStatus, setCurrentStatus] = useState(initialStatus)
-  const [auditLog, setAuditLog] = useState<AuditEntry[]>(review.auditLog)
+  // Locally-optimistic audit entries — only used by demo (non-DB) reviews.
+  // DB reviews get fresh entries from the server via router.refresh(), so
+  // we do NOT store server entries in state (that would go stale after refresh).
+  const [localAuditEntries, setLocalAuditEntries] = useState<AuditEntry[]>([])
+
+  // Final audit log: server-rendered base (always fresh after router.refresh())
+  // merged with any locally-added optimistic entries (demo reviews only).
+  const auditLog = useMemo(
+    () =>
+      localAuditEntries.length === 0
+        ? review.auditLog
+        : [...review.auditLog, ...localAuditEntries],
+    [review.auditLog, localAuditEntries]
+  )
 
   // ── OCR trigger ─────────────────────────────────────────────────────────────
   const router = useRouter()
   const [isOcrPending, startOcrTransition] = useTransition()
+  const [, startDecisionTransition] = useTransition()
   const [ocrError, setOcrError] = useState<string | null>(null)
+
+  // ── Decision error state ───────────────────────────────────────────────────
+  // Set when the server action / RPC rejects a decision; auto-dismissed after 6 s.
+  const [decisionError, setDecisionError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!decisionError) return
+    const t = setTimeout(() => setDecisionError(null), 6000)
+    return () => clearTimeout(t)
+  }, [decisionError])
+
+  /** Shared worker kick — fires /api/internal/process-ocr and refreshes. */
+  const kickOcrWorker = useCallback(async (dbId: string, jobId: string) => {
+    console.log('[OCR trigger] firing worker | jobId:', jobId)
+    try {
+      const workerRes = await fetch('/api/internal/process-ocr', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ reviewId: dbId }),
+      })
+      const workerData = await workerRes.json() as { ok: boolean; error?: string }
+      if (!workerData.ok) {
+        console.error('[OCR trigger] worker reported failure | error:', workerData.error)
+      } else {
+        console.log('[OCR trigger] worker completed | jobId:', jobId)
+      }
+    } catch (fetchErr) {
+      console.error('[OCR trigger] worker fetch error:', fetchErr)
+    }
+    router.refresh()
+  }, [router])
 
   const handleTriggerOcr = useCallback(() => {
     const dbId = review.reviewDbId
@@ -1761,90 +2023,150 @@ export function ReviewDetail({ review }: { review: ReviewDetailType }) {
       }
 
       console.log('[OCR trigger] enqueued | jobId:', result.jobId)
-
-      // Refresh immediately so the UI transitions to "Queued for AI analysis"
+      // Show "Queued" state immediately, then wait for the worker to finish.
       router.refresh()
+      await kickOcrWorker(dbId, result.jobId)
+    })
+  }, [review.reviewDbId, isOcrPending, startOcrTransition, router, kickOcrWorker])
 
-      // ── Step 2: Kick the worker (runs OCR synchronously in this request) ──
-      // Fire-and-forget the worker route; await it so the transition stays
-      // "pending" until OCR finishes, keeping the processing spinner visible.
-      console.log('[OCR trigger] firing worker | jobId:', result.jobId)
-      try {
-        const workerRes = await fetch('/api/internal/process-ocr', {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ reviewId: dbId }),
-        })
-        const workerData = await workerRes.json() as { ok: boolean; error?: string }
-        if (!workerData.ok) {
-          console.error('[OCR trigger] worker reported failure | error:', workerData.error)
-          // Don't set ocrError here — the job row will reflect the failure on refresh
-        } else {
-          console.log('[OCR trigger] worker completed | jobId:', result.jobId)
-        }
-      } catch (fetchErr) {
-        // Network error reaching the internal route — not fatal; job will stay
-        // in pending/processing state and the user can refresh manually.
-        console.error('[OCR trigger] worker fetch error:', fetchErr)
+  const handleRerunOcr = useCallback(() => {
+    const dbId = review.reviewDbId
+    if (!dbId || isOcrPending) return
+    setOcrError(null)
+    startOcrTransition(async () => {
+      console.log('[OCR re-run] enqueuing | reviewDbId:', dbId)
+      const result = await rerunReviewOCR(dbId)
+
+      if (!result.success) {
+        console.error('[OCR re-run] enqueue failed | error:', result.error)
+        setOcrError(result.error)
+        router.refresh()
+        return
       }
 
-      // Final refresh — shows the extraction result (or failure) from the DB
+      console.log('[OCR re-run] enqueued | jobId:', result.jobId)
       router.refresh()
+      await kickOcrWorker(dbId, result.jobId)
     })
-  }, [review.reviewDbId, isOcrPending, startOcrTransition, router])
+  }, [review.reviewDbId, isOcrPending, startOcrTransition, router, kickOcrWorker])
 
   const triggerDecision = useCallback((decision: DecisionType) => {
     if (actionState !== 'idle') return
     setPendingDecision(decision)
     setActionState('loading')
 
-    setTimeout(() => {
-      const ts = nowTimeStr()
-      const label = { approved: 'approved', escalated: 'escalated', rejected: 'rejected' }[decision]
-      const newStatus = { approved: 'Approved', escalated: 'Escalated', rejected: 'Rejected' }[decision]
+    const dbId = review.reviewDbId
 
-      setFinalDecision(decision)
-      setActionState('done')
-      setDecisionTime(ts)
-      setCurrentStatus(newStatus)
-      setAuditLog(prev => [...prev, {
-        id: `human-${Date.now()}`,
-        timestamp: ts,
-        actor: review.assignedTo,
-        actorType: 'human' as const,
-        action: `Review ${label}`,
-        detail: decision === 'approved'
-          ? `Approved by ${review.assignedTo} — submission marked as valid`
-          : decision === 'rejected'
-          ? `Rejected by ${review.assignedTo} — submission flagged as fraudulent`
-          : `Escalated by ${review.assignedTo} — routed to Tier 2 fraud team`,
-        type: decision as AuditEntry['type'],
-      }])
-    }, 900)
+    if (!dbId) {
+      // Demo review — simulate locally with a short delay
+      setTimeout(() => {
+        const ts = nowTimeStr()
+        const label = { approved: 'approved', escalated: 'escalated', rejected: 'rejected' }[decision]
+        const newStatus = { approved: 'Approved', escalated: 'Escalated', rejected: 'Rejected' }[decision]
+        setFinalDecision(decision)
+        setActionState('done')
+        setDecisionTime(ts)
+        setCurrentStatus(newStatus)
+        setLocalAuditEntries(prev => [...prev, {
+          id: `human-${Date.now()}`,
+          timestamp: ts,
+          actor: review.assignedTo,
+          actorType: 'human' as const,
+          action: `Review ${label}`,
+          detail: decision === 'approved'
+            ? `Approved by ${review.assignedTo} — submission marked as valid`
+            : decision === 'rejected'
+            ? `Rejected by ${review.assignedTo} — submission flagged as fraudulent`
+            : `Escalated by ${review.assignedTo} — routed to Tier 2 fraud team`,
+          type: decision as AuditEntry['type'],
+        }])
+      }, 900)
+      return
+    }
 
-  }, [actionState, review.assignedTo])
+    // Real DB review — call server action
+    startDecisionTransition(async () => {
+      const result = await submitReviewDecision(dbId, decision)
+      if (result.success) {
+        const ts = result.decidedAt ? fmtDecisionTime(result.decidedAt) : nowTimeStr()
+        const newStatus = { approved: 'Approved', escalated: 'Escalated', rejected: 'Rejected' }[decision]
+        setDecisionError(null)
+        setFinalDecision(decision)
+        setActionState('done')
+        setDecisionTime(ts)
+        setCurrentStatus(newStatus)
+        router.refresh()
+      } else {
+        console.error('[Decision] server action failed:', result.code, result.error)
+        setActionState('idle')
+        setPendingDecision(null)
+        // Map error codes to reviewer-friendly messages
+        const msg =
+          result.code === 'ALREADY_PROCESSED'
+            ? `This review was already ${result.conflictStatus ?? 'processed'} by another reviewer. Refresh to see the latest state.`
+            : result.code === 'FORBIDDEN'
+            ? 'Permission denied — you are not authorized to decide this review.'
+            : result.code === 'NOT_FOUND'
+            ? 'Review not found. It may have been deleted.'
+            : result.error ?? 'Could not record decision. Please try again.'
+        setDecisionError(msg)
+      }
+    })
+  }, [actionState, review.reviewDbId, review.assignedTo, startDecisionTransition, router])
 
   const handleApprove  = useCallback(() => triggerDecision('approved'),  [triggerDecision])
   const handleEscalate = useCallback(() => triggerDecision('escalated'), [triggerDecision])
   const handleReject   = useCallback(() => triggerDecision('rejected'),  [triggerDecision])
 
-  const handleReopen = useCallback(() => {
-    const ts = nowTimeStr()
-    setActionState('idle')
-    setFinalDecision(null)
-    setPendingDecision(null)
-    setDecisionTime(null)
-    setCurrentStatus(initialStatus)
-    setAuditLog(prev => [...prev, {
-      id: `reopen-${Date.now()}`,
-      timestamp: ts,
-      actor: review.assignedTo,
-      actorType: 'human' as const,
-      action: 'Review reopened',
-      detail: `Reopened by ${review.assignedTo} — previous decision reversed for re-evaluation`,
-      type: 'comment' as const,
-    }])
-  }, [initialStatus, review.assignedTo])
+  const handleReopen = useCallback((reason: string) => {
+    const dbId = review.reviewDbId
+
+    if (!dbId) {
+      // Demo review — reset locally (no reason required)
+      const ts = nowTimeStr()
+      setActionState('idle')
+      setFinalDecision(null)
+      setPendingDecision(null)
+      setDecisionTime(null)
+      // Always reset to "Pending", not to initialStatus — the review was
+      // previously decided, so initialStatus is "Approved"/"Rejected"/etc.
+      setCurrentStatus('Pending')
+      setLocalAuditEntries(prev => [...prev, {
+        id: `reopen-${Date.now()}`,
+        timestamp: ts,
+        actor: review.assignedTo,
+        actorType: 'human' as const,
+        action: 'Review reopened',
+        detail: `Reopened by ${review.assignedTo} — previous decision reversed for re-evaluation`,
+        type: 'comment' as const,
+      }])
+      return
+    }
+
+    // Real DB review — call server action
+    startDecisionTransition(async () => {
+      const result = await reopenReview(dbId, reason)
+      if (result.success) {
+        setDecisionError(null)
+        setActionState('idle')
+        setFinalDecision(null)
+        setPendingDecision(null)
+        setDecisionTime(null)
+        // Always "Pending" after reopen; initialStatus was the pre-reopen status.
+        setCurrentStatus('Pending')
+        router.refresh()
+      } else {
+        console.error('[Reopen] server action failed:', result.code, result.error)
+        const msg =
+          result.code === 'REASON_REQUIRED'
+            ? 'A reason is required to reopen this review.'
+            : result.code === 'ALREADY_OPEN'
+            ? 'This review is already open.'
+            : result.error ?? 'Could not reopen review. Please try again.'
+        setDecisionError(msg)
+      }
+    })
+  }, [review.reviewDbId, review.assignedTo, startDecisionTransition, router])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -1918,29 +2240,65 @@ export function ReviewDetail({ review }: { review: ReviewDetailType }) {
           <OcrExtractionCard
             ocrExtraction={review.ocrExtraction}
             onTriggerOcr={review.reviewDbId ? handleTriggerOcr : undefined}
+            onRerunOcr={review.reviewDbId ? handleRerunOcr : undefined}
             isTriggering={isOcrPending}
             ocrError={ocrError}
             latestOcrJob={review.latestOcrJob}
           />
           {review.fraudAnalysis
-            ? <FraudAnalysisCard analysis={review.fraudAnalysis} />
-            : <FraudChecksCard checks={review.fraudChecks} />
-          }
-          <ConfidenceCard confidence={review.confidence} riskScore={review.riskScore} />
-          <ReasoningCard reasoning={review.reasoning} />
-          <DecisionCard
-            riskScore={review.riskScore}
-            confidence={review.confidence}
-            reviewerName={review.assignedTo}
-            actionState={actionState}
-            pendingDecision={pendingDecision}
-            finalDecision={finalDecision}
-            decisionTime={decisionTime}
-            onApprove={handleApprove}
-            onEscalate={handleEscalate}
-            onReject={handleReject}
-            onReopen={handleReopen}
-          />
+  ? <FraudAnalysisCard analysis={review.fraudAnalysis} />
+  : <FraudChecksCard checks={review.fraudChecks} />
+}
+
+<ConfidenceCard
+  // Prefer the AI analysis confidence (review_ai_analysis.recommendation_confidence)
+  // over the review row's ai_confidence column, which the pipeline never writes to.
+  // Falls back to review.confidence for demo/legacy reviews that have no aiAnalysis.
+  confidence={review.aiAnalysis?.confidence ?? review.confidence}
+  riskScore={review.riskScore}
+/>
+
+{review.aiAnalysis && (
+  <AiCopilotCard
+    summary={review.aiAnalysis.summary}
+    recommendation={review.aiAnalysis.recommendation}
+    confidence={review.aiAnalysis.confidence}
+    reasoning={review.aiAnalysis.reasoning}
+    riskScore={review.aiAnalysis.riskScore}
+    riskLevel={review.aiAnalysis.riskLevel}
+    isStale={review.aiAnalysis.isStale}
+  />
+)}
+
+{review.reasoning.length > 0 && (
+  <ReasoningCard reasoning={review.reasoning} />
+)}
+
+<DecisionCard
+  riskScore={review.riskScore}
+  // Same source cascade as ConfidenceCard above — aiAnalysis confidence wins
+  // over the stale reviews.ai_confidence column when AI analysis has run.
+  confidence={review.aiAnalysis?.confidence ?? review.confidence}
+  reviewerName={review.assignedTo}
+  actionState={actionState}
+  pendingDecision={pendingDecision}
+  finalDecision={finalDecision}
+  decisionTime={decisionTime}
+  onApprove={handleApprove}
+  onEscalate={handleEscalate}
+  onReject={handleReject}
+  onReopen={handleReopen}
+  // DB stores 'approve' | 'review' | 'reject'; DecisionCard expects
+  // 'approved' | 'escalated' | 'rejected'. Map at the boundary.
+  aiRecommendation={
+    review.aiAnalysis?.recommendation === 'approve'  ? 'approved'
+    : review.aiAnalysis?.recommendation === 'reject' ? 'rejected'
+    : review.aiAnalysis?.recommendation === 'review' ? 'escalated'
+    : null
+  }
+  decisionError={decisionError}
+  requireReopenReason={!!review.reviewDbId}
+/>
         </div>
       </div>
 
@@ -1950,6 +2308,7 @@ export function ReviewDetail({ review }: { review: ReviewDetailType }) {
         {review.ocrHistory && review.ocrHistory.length > 0 && (
           <OcrTimelineCard history={review.ocrHistory} />
         )}
+
         {/* Audit trail */}
         <AuditTimelineCard entries={auditLog} />
       </div>

@@ -167,6 +167,29 @@ export interface OcrExtraction {
   processingMs: number | null
   /** ISO 8601 timestamp of the extraction row */
   extractedAt: string
+
+  // ── Ingestion observability (Part 5 / 5.5) ──────────────────────────────────
+
+  /**
+   * Raw file classification: 'image' | 'text_pdf' | 'scanned_pdf'.
+   * Null for extractions created before the ingestion layer was deployed.
+   */
+  sourceType?: 'image' | 'text_pdf' | 'scanned_pdf' | null
+
+  /**
+   * Processing path: 'direct_vision' | 'text_extraction' | 'pdf_page_render'.
+   * Null for legacy extractions.
+   */
+  ingestionStrategy?: 'direct_vision' | 'text_extraction' | 'pdf_page_render' | null
+
+  /** Number of pages processed (1 for images, N for PDFs). */
+  pageCount?: number | null
+
+  /**
+   * Ingestion + OCR pipeline version identifier.
+   * Enables future regression analysis across pipeline versions.
+   */
+  pipelineVersion?: string | null
 }
 
 // ── OCR Job Queue ─────────────────────────────────────────────────────────────
@@ -360,9 +383,11 @@ export interface AuditEntry {
   action: string
   detail: string
   type: AuditActionType
+  /** ISO 8601 — used for chronological merge-sort of audit_logs + review_events. */
+  createdAt?: string
 }
 
-export interface ReviewDetail {
+export interface ReviewDetailType {
   id: string
   status: ReviewStatus
   submitter: string
@@ -384,12 +409,16 @@ export interface ReviewDetail {
   fraudChecks: ReviewFraudCheck[]
   reasoning: string[]
   auditLog: AuditEntry[]
+
   /** Signed storage URL for the uploaded file (server-generated, ~1 h TTL). Null for demo reviews. */
   fileUrl?: string | null
+
   /** MIME type of the uploaded file, e.g. "image/png" or "application/pdf". */
   fileMimeType?: string | null
+
   /** Original filename as stored in review_files. */
   fileName?: string | null
+
   /**
    * Latest OCR extraction row for this review.
    * Undefined = not yet fetched (demo reviews).
@@ -397,34 +426,80 @@ export interface ReviewDetail {
    * OcrExtraction = extraction data present.
    */
   ocrExtraction?: OcrExtraction | null
+
   /**
-   * Supabase row UUID (reviews.id).  Distinct from `id` which is the human-readable
-   * review_code (e.g. "REV-1A2B3C").  Required to call runReviewOCR.
+   * Supabase row UUID (reviews.id). Distinct from `id` which is the human-readable
+   * review_code (e.g. "REV-1A2B3C"). Required to call runReviewOCR.
    * Undefined for demo/static reviews that have no DB row.
    */
   reviewDbId?: string
+
   /**
    * Up to 10 most-recent OCR extraction rows, newest-first.
    * Used to build the OCR timeline card via buildOcrTimeline().
    * Undefined for demo/static reviews that have no DB row.
    */
   ocrHistory?: OcrHistoryItem[]
+
   /**
    * Most-recent ocr_jobs row for this review.
    * Drives the "Queued" and "Processing" UI states that appear before any
    * ocr_extractions row exists.
-   * Undefined for demo/static reviews.  Null when no job has been enqueued yet.
+   * Undefined for demo/static reviews. Null when no job has been enqueued yet.
    */
   latestOcrJob?: OcrJobSummary | null
+
   /**
    * Aggregated fraud analysis: risk score, risk level, and all fraud signals
    * generated from the latest OCR extraction.
-   * Undefined for demo/static reviews.  Null when no signals exist yet.
+   * Undefined for demo/static reviews. Null when no signals exist yet.
    */
   fraudAnalysis?: import('@/lib/fraud/types').FraudAnalysisSummary | null
+
+  /**
+   * AI reviewer copilot analysis generated after OCR + fraud analysis.
+   * Stored in review_ai_analysis table and surfaced on the review detail page.
+   */
+  aiAnalysis?: {
+    summary?: string | null
+    recommendation?: string | null
+    confidence?: number | null
+    reasoning?: string[]
+
+    riskScore?: number
+    riskLevel?: string
+
+    /**
+     * FK to the ocr_extractions row that produced this analysis.
+     * Compared against the latest completed extraction ID to detect staleness.
+     */
+    extractionId?: string | null
+
+    /**
+     * True when extractionId differs from the latest completed extraction,
+     * meaning this analysis was generated from an older OCR run.
+     */
+    isStale?: boolean
+  } | null
+  
+  reviewEvents?: {
+    id: string
+    event_type: string
+    actor_type: string | null
+    actor_id: string | null
+    metadata: Record<string, unknown> | null
+    created_at: string
+  }[]
+
+  /**
+   * ISO 8601 timestamp of when the review was decided (approved/rejected/escalated).
+   * Null when the review has not yet been decided.
+   * Undefined for demo/static reviews.
+   */
+  decidedAt?: string | null
 }
 
-export const REVIEWS: Record<string, ReviewDetail> = {
+export const REVIEWS: Record<string, ReviewDetailType> = {
   'REV-8821': {
     id: 'REV-8821',
     status: 'flagged',
