@@ -11,20 +11,26 @@ export interface ClaimedOcrJob {
 const STALE_MINUTES = 10
 
 /**
- * Claims the next pending OCR job atomically.
+ * Claims the next claimable OCR job atomically.
+ *
+ * Claimable statuses (migration 202605280400):
+ *   'pending'  — freshly enqueued, never attempted
+ *   'retrying' — previous attempt failed, attempts < max_attempts
  *
  * Strategy:
- * 1. Requeue stale "processing" jobs older than STALE_MINUTES
- * 2. Select oldest pending job
- * 3. Atomically update → processing
- * 4. Return claimed job
- *
- * Safe for parallel workers.
+ * 1. Requeue stale 'processing' jobs (worker died mid-run, > STALE_MINUTES)
+ *    back to 'pending' so they are picked up again.
+ * 2. SELECT the oldest claimable job (pending OR retrying).
+ * 3. Atomically UPDATE → 'processing' with the same status guard to prevent
+ *    two concurrent workers claiming the same row.
+ * 4. Return the claimed job.
  */
 export async function claimNextOcrJob(
   supabase: SupabaseClient<Database>
 ): Promise<ClaimedOcrJob | null> {
   // ── Step 1: Requeue stale jobs ───────────────────────────────────────────
+  // A job stuck in 'processing' longer than STALE_MINUTES means the worker
+  // died or timed out.  Reset it to 'pending' so it is retried.
   const staleBefore = new Date(
     Date.now() - STALE_MINUTES * 60 * 1000
   ).toISOString()
@@ -32,7 +38,7 @@ export async function claimNextOcrJob(
   const { error: staleError } = await supabase
     .from('ocr_jobs')
     .update({
-      status: 'pending',
+      status:     'pending',
       started_at: null,
     })
     .eq('status', 'processing')
@@ -45,11 +51,14 @@ export async function claimNextOcrJob(
     )
   }
 
-  // ── Step 2: Find next pending job ────────────────────────────────────────
+  // ── Step 2: Find next claimable job ──────────────────────────────────────
+  // Include both 'pending' (new) and 'retrying' (previous failure, within
+  // max_attempts).  Without 'retrying', jobs reset by failOcrJob would never
+  // be picked up again.
   const { data: pendingJob, error: pendingError } = await supabase
     .from('ocr_jobs')
     .select('id, review_id, organization_id, attempts')
-    .eq('status', 'pending')
+    .in('status', ['pending', 'retrying'])
     .order('created_at', { ascending: true })
     .limit(1)
     .maybeSingle()
@@ -68,15 +77,17 @@ export async function claimNextOcrJob(
   }
 
   // ── Step 3: Atomic claim ─────────────────────────────────────────────────
+  // The .in() guard mirrors the SELECT so that if two workers race, only the
+  // first UPDATE wins — the second receives an empty result.
   const { data: claimedJob, error: claimError } = await supabase
     .from('ocr_jobs')
     .update({
-      status: 'processing',
+      status:     'processing',
       started_at: new Date().toISOString(),
-      attempts: (pendingJob.attempts ?? 0) + 1,
+      attempts:   (pendingJob.attempts ?? 0) + 1,
     })
     .eq('id', pendingJob.id)
-    .eq('status', 'pending')
+    .in('status', ['pending', 'retrying'])   // atomic guard — matches the SELECT above
     .select('id, review_id, organization_id, attempts')
     .maybeSingle()
 

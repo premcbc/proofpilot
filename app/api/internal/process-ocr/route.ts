@@ -1,157 +1,53 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { claimNextOcrJob } from '@/lib/ocr/claim-next-job'
-import { runReviewOCR } from '@/lib/actions/ocr'
+import { processOcrQueue } from '@/lib/ocr/process-worker'
 
-const MAX_JOBS_PER_RUN = 3
+/**
+ * POST /api/internal/process-ocr
+ *
+ * Two callers:
+ *   1. Vercel cron (vercel.json, every minute) — no user session.
+ *      Authenticates with Authorization: Bearer <CRON_SECRET>.
+ *
+ *   2. Review detail page (kickOcrWorker) — authenticated user clicked
+ *      "Run OCR" or "Re-run OCR".  Authenticates via user session cookie.
+ *
+ * Auth rules:
+ *   - If CRON_SECRET env var is set:
+ *       Cron path  → must supply  Authorization: Bearer <CRON_SECRET>
+ *       Client path → must have   valid Supabase user session
+ *   - If CRON_SECRET is not set (local dev, localhost is not public):
+ *       No auth check — safe because the endpoint is not publicly reachable.
+ *
+ * All queue operations delegate to processOcrQueue() which uses the
+ * service-role admin client internally — no session needed on the worker side.
+ */
+export async function POST(request: NextRequest): Promise<NextResponse> {
+  const cronSecret = process.env.CRON_SECRET
 
-export async function POST(): Promise<NextResponse> {
-  console.log('[process-ocr] worker started')
+  if (cronSecret) {
+    const authHeader = request.headers.get('authorization')
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const supabase = (await createClient()) as any
-
-  const processed: Array<{
-    jobId: string
-    success: boolean
-    error?: string
-  }> = []
-
-  for (let i = 0; i < MAX_JOBS_PER_RUN; i++) {
-    // ── Claim next job ─────────────────────────────────────────────────────
-    const job = await claimNextOcrJob(supabase)
-
-    if (!job) {
-      console.log(
-        '[process-ocr] no more pending jobs'
-      )
-
-      break
-    }
-
-    console.log(
-      '[process-ocr] processing job',
-      '| jobId:',
-      job.id,
-      '| reviewId:',
-      job.review_id,
-      '| attempt:',
-      job.attempts
-    )
-
-    try {
-      // ── Execute OCR pipeline ────────────────────────────────────────────
-      const result = await runReviewOCR(job.review_id)
-
-      if (result.success) {
-        // ── Mark completed ────────────────────────────────────────────────
-        const { error: completeError } = await supabase
-          .from('ocr_jobs')
-          .update({
-            status: 'completed',
-            completed_at: new Date().toISOString(),
-            error_message: null,
-          })
-          .eq('id', job.id)
-
-        if (completeError) {
-          console.error(
-            '[process-ocr] failed marking completed:',
-            completeError.message
-          )
-        }
-
-        console.log(
-          '[process-ocr] OCR completed',
-          '| jobId:',
-          job.id,
-          '| extractionId:',
-          result.extractionId,
-          '| confidence:',
-          result.confidence
-        )
-
-        processed.push({
-          jobId: job.id,
-          success: true,
-        })
-      } else {
-        // ── Mark failed ───────────────────────────────────────────────────
-        const { error: failError } = await supabase
-          .from('ocr_jobs')
-          .update({
-            status: 'failed',
-            completed_at: new Date().toISOString(),
-            error_message: result.error,
-          })
-          .eq('id', job.id)
-
-        if (failError) {
-          console.error(
-            '[process-ocr] failed marking failed:',
-            failError.message
-          )
-        }
-
-        console.error(
-          '[process-ocr] OCR failed',
-          '| jobId:',
-          job.id,
-          '| error:',
-          result.error
-        )
-
-        processed.push({
-          jobId: job.id,
-          success: false,
-          error: result.error,
-        })
-      }
-    } catch (err) {
-      const msg =
-        err instanceof Error ? err.message : String(err)
-
-      // ── Hard-failure recovery ───────────────────────────────────────────
-      const { error: failError } = await supabase
-        .from('ocr_jobs')
-        .update({
-          status: 'failed',
-          completed_at: new Date().toISOString(),
-          error_message: msg,
-        })
-        .eq('id', job.id)
-
-      if (failError) {
-        console.error(
-          '[process-ocr] failed marking exception:',
-          failError.message
+    if (authHeader === `Bearer ${cronSecret}`) {
+      // ── Cron path: secret matches ────────────────────────────────────────
+      // processOcrQueue uses the admin client internally — no session needed.
+    } else {
+      // ── Client path: fall back to user session ───────────────────────────
+      // Covers the "Run OCR" button in the review detail page which fires a
+      // fetch() without the cron secret.
+      const supabase = await createClient()
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) {
+        return NextResponse.json(
+          { ok: false, error: 'Unauthorized' },
+          { status: 401 },
         )
       }
-
-      console.error(
-        '[process-ocr] worker exception',
-        '| jobId:',
-        job.id,
-        '| error:',
-        msg
-      )
-
-      processed.push({
-        jobId: job.id,
-        success: false,
-        error: msg,
-      })
     }
   }
+  // If CRON_SECRET is unset: no auth check (local dev only).
 
-  console.log(
-    '[process-ocr] worker completed',
-    '| processed:',
-    processed.length
-  )
+  const result = await processOcrQueue()
 
-  return NextResponse.json({
-    ok: true,
-    processed,
-  })
+  return NextResponse.json({ ok: true, processed: result.processed })
 }

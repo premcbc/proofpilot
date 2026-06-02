@@ -37,9 +37,21 @@ export interface ReviewAnalysisResult {
  * - Recommend human action
  * - Generate reviewer reasoning
  *
- * IMPORTANT:
- * This does NOT auto-approve anything.
- * Human remains final authority.
+ * ═══════════════════════════════════════════════════════════════════════════
+ * ARCHITECTURE CONTRACT — IMMUTABLE
+ * ═══════════════════════════════════════════════════════════════════════════
+ * This function MUST NEVER mutate reviews.status.
+ *
+ * The AI recommendation ('approve' | 'review' | 'reject') is advisory only.
+ * It is stored in review_ai_analysis.recommendation and displayed to the
+ * reviewer as a suggestion.  The human reviewer ALWAYS makes the final call.
+ *
+ * Permitted writes: review_ai_analysis (INSERT), review_events (INSERT).
+ * Forbidden writes: reviews.status — NEVER set to approved/rejected/escalated.
+ *
+ * The reviews_require_authorized_decision DB trigger enforces this at the
+ * database level (migration 202605310200_block_auto_review_decisions.sql).
+ * ═══════════════════════════════════════════════════════════════════════════
  */
 export async function runReviewAnalysis(
   input: ReviewAnalysisInput

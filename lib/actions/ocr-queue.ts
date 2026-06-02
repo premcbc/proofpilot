@@ -12,7 +12,7 @@
  *   enqueueOcrJob()          →  INSERT  status='pending'
  *   claimNextPendingOcrJob() →  UPDATE  status='processing', attempts++
  *   completeOcrJob()         →  UPDATE  status='completed'
- *   failOcrJob()             →  UPDATE  status='failed'  (or back to 'pending' for retry)
+ *   failOcrJob()             →  UPDATE  status='retrying' (retry) | 'permanently_failed' (exhausted)
  *
  * Concurrency note
  * ─────────────────
@@ -71,7 +71,9 @@ interface OcrJobRow {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const VALID_JOB_STATUSES: readonly OcrJobStatus[] = ['pending', 'processing', 'completed', 'failed']
+const VALID_JOB_STATUSES: readonly OcrJobStatus[] = [
+  'pending', 'processing', 'retrying', 'completed', 'permanently_failed', 'failed',
+]
 
 function toOcrJobStatus(raw: string): OcrJobStatus {
   return VALID_JOB_STATUSES.includes(raw as OcrJobStatus)
@@ -227,12 +229,17 @@ export async function claimNextPendingOcrJob(
 
 /**
  * Mark a job as successfully completed.
+ *
+ * @param supabase - Optional pre-created client.  The background worker passes
+ *   the service-role admin client here because the after() context has no user
+ *   session.  When omitted, falls back to the session-based createClient().
  */
-export async function completeOcrJob(jobId: string): Promise<void> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function completeOcrJob(jobId: string, supabase?: any): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const supabase = (await createClient()) as any
+  const client = supabase ?? ((await createClient()) as any)
 
-  const { error } = await supabase
+  const { error } = await client
     .from('ocr_jobs')
     .update({
       status:       'completed',
@@ -250,15 +257,18 @@ export async function completeOcrJob(jobId: string): Promise<void> {
 /**
  * Mark a job as failed.
  *
- * Retry logic: if attempts < max_attempts, resets status to 'pending' so the
- * next worker poll will reclaim it.  Once attempts ≥ max_attempts the job
- * is permanently failed.
+ * Retry logic (matches migration 202605280400 status values):
+ *   attempts < max_attempts  →  'retrying'          (worker will reclaim)
+ *   attempts ≥ max_attempts  →  'permanently_failed' (terminal)
+ *
+ * @param supabase - Optional pre-created client (see completeOcrJob).
  */
-export async function failOcrJob(jobId: string, errorMessage: string): Promise<void> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function failOcrJob(jobId: string, errorMessage: string, supabase?: any): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const supabase = (await createClient()) as any
+  const client = supabase ?? ((await createClient()) as any)
 
-  const { data: job } = await supabase
+  const { data: job } = await client
     .from('ocr_jobs')
     .select('attempts, max_attempts')
     .eq('id', jobId)
@@ -267,7 +277,7 @@ export async function failOcrJob(jobId: string, errorMessage: string): Promise<v
   const attempts    = job?.attempts    ?? 1
   const maxAttempts = job?.max_attempts ?? 3
   const willRetry   = attempts < maxAttempts
-  const nextStatus: OcrJobStatus = willRetry ? 'pending' : 'failed'
+  const nextStatus: OcrJobStatus = willRetry ? 'retrying' : 'permanently_failed'
 
   const update: Record<string, string | null> = {
     status:        nextStatus,
@@ -275,7 +285,7 @@ export async function failOcrJob(jobId: string, errorMessage: string): Promise<v
   }
   if (!willRetry) update.completed_at = new Date().toISOString()
 
-  const { error } = await supabase
+  const { error } = await client
     .from('ocr_jobs')
     .update(update)
     .eq('id', jobId) as { error: { message: string } | null }

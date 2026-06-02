@@ -194,8 +194,19 @@ export interface OcrExtraction {
 
 // ── OCR Job Queue ─────────────────────────────────────────────────────────────
 
-/** Four-state lifecycle of an ocr_jobs row. */
-export type OcrJobStatus = 'pending' | 'processing' | 'completed' | 'failed'
+/**
+ * Lifecycle states of an ocr_jobs row.
+ * Migration 202605280400 replaced 'failed' with 'retrying' (transient retry)
+ * and 'permanently_failed' (all attempts exhausted).  The legacy 'failed' value
+ * is kept in the union so rows written before the migration still type-check.
+ */
+export type OcrJobStatus =
+  | 'pending'
+  | 'processing'
+  | 'retrying'
+  | 'completed'
+  | 'permanently_failed'
+  | 'failed'          // legacy — written before resilient-lifecycle migration
 
 /**
  * Minimal projection of an ocr_jobs row used for UI state derivation.

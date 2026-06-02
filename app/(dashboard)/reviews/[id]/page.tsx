@@ -386,13 +386,9 @@ supabase
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const ocrJobRow = ocrJobRes.data as any
 
-    const VALID_JOB_STATUSES: OcrJobStatus[] =
-      [
-        'pending',
-        'processing',
-        'completed',
-        'failed',
-      ]
+    const VALID_JOB_STATUSES: OcrJobStatus[] = [
+      'pending', 'processing', 'retrying', 'completed', 'permanently_failed', 'failed',
+    ]
 
     let latestOcrJob: OcrJobSummary | null =
       null

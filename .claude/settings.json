@@ -33,7 +33,14 @@
       "Bash(node -e \"const d=require\\('./package.json'\\); const deps={...d.dependencies,...d.devDependencies}; Object.keys\\(deps\\).filter\\(k=>/pdf|canvas/i.test\\(k\\)\\).sort\\(\\).forEach\\(k=>console.log\\(k,deps[k]\\)\\)\")",
       "Bash(node -e ' *)",
       "Bash(node -e *)",
-      "Bash(node)"
+      "Bash(node)",
+      "Bash(dir \"c:\\\\Users\\\\ADMIN\\\\Downloads\\\\proofpilot\\\\middleware*\")",
+      "Bash(dir \"c:\\\\Users\\\\ADMIN\\\\Downloads\\\\proofpilot\" /B)",
+      "Bash(findstr -i \"middleware\")",
+      "Bash(powershell -Command ' *)",
+      "Bash(dir /a /b .env*)",
+      "Bash(Get-ChildItem -Path \"c:/Users/ADMIN/Downloads/proofpilot\" -Force -Filter \".env*\")",
+      "Bash(Select-Object Name, Length, LastWriteTime)"
     ],
     "additionalDirectories": [
       "c:\\Users\\ADMIN\\Downloads\\proofpilot\\app\\reviews",

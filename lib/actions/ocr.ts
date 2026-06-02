@@ -22,6 +22,28 @@
  * The ingestion layer (steps 4-5) is the only code that knows about
  * file types — everything from step 6 onward operates on a unified
  * OcrStructuredData / rawText contract.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * ARCHITECTURE CONTRACT — IMMUTABLE
+ * ═══════════════════════════════════════════════════════════════════════════
+ * This pipeline MUST NEVER mutate reviews.status to a terminal value.
+ * It is STRICTLY READ-ONLY with respect to the human decision states:
+ *   approved | rejected | escalated
+ *
+ * Permitted writes:
+ *   ocr_extractions       — extraction results
+ *   fraud_signals         — per-signal rows
+ *   review_ai_analysis    — AI recommendation + reasoning
+ *   review_events         — audit trail events
+ *   reviews.risk_score    — numeric risk score (0–100)
+ *   reviews.risk_level    — low / medium / high / critical
+ *   reviews.status        → ONLY 'pending' or 'flagged' — NEVER terminal
+ *
+ * The decide_review RPC (app/actions/review-decision.ts) is the sole
+ * authorized path to approved | rejected | escalated.  This is enforced at
+ * the DB level by the reviews_require_authorized_decision trigger
+ * (migration 202605310200_block_auto_review_decisions.sql).
+ * ═══════════════════════════════════════════════════════════════════════════
  */
 
 import OpenAI from 'openai'
@@ -621,22 +643,40 @@ export async function runReviewOCR(reviewId: string): Promise<OcrResult> {
     // Step 9: Generate fraud signals ────────────────────────────────────────
     const signals: FraudSignalInput[] = generateFraudSignals(structuredData)
 
+    // ── Duplicate-submission signal ──────────────────────────────────────────
+    //
+    // Dev bypass: set SKIP_DUPLICATE_SIGNALS=true in .env.local to suppress
+    // duplicate signals during local testing (repeated uploads of the same
+    // screenshot would otherwise inflate risk scores and trigger reject
+    // recommendations on every test run).
+    //
+    // Production: leave SKIP_DUPLICATE_SIGNALS unset.  Severity scales with
+    // match count so a single accidental re-upload doesn't immediately produce
+    // a critical signal:
+    //   1–2 matches → 'high'     (possible legitimate re-upload)
+    //   3+  matches → 'critical' (systematic reuse pattern)
+    const skipDuplicates = process.env.SKIP_DUPLICATE_SIGNALS === 'true'
+
     if (duplicateMatches.length > 0) {
-      signals.push({
-        signal_type: 'duplicate_submission',
-        severity:    'critical',
-        confidence:  100,
-        title:       'Duplicate Screenshot Detected',
-        description: `This upload exactly matches ${duplicateMatches.length} previous submission(s).`,
-        metadata: {
-          duplicate_review_ids: duplicateMatches.map(m => m.review_id),
-          duplicate_count:      duplicateMatches.length,
-        },
-      })
-      console.log('[runReviewOCR] duplicate fraud signal | matches:', duplicateMatches.length)
+      if (skipDuplicates) {
+        console.log('[runReviewOCR] SKIP_DUPLICATE_SIGNALS=true — duplicate signal suppressed | matches:', duplicateMatches.length)
+      } else {
+        const dupSeverity = duplicateMatches.length >= 3 ? 'critical' : 'high'
+        signals.push({
+          signal_type: 'duplicate_submission',
+          severity:    dupSeverity,
+          confidence:  100,
+          title:       'Duplicate Screenshot Detected',
+          description: `This upload exactly matches ${duplicateMatches.length} previous submission(s).`,
+          metadata: {
+            duplicate_review_ids: duplicateMatches.map(m => m.review_id),
+            duplicate_count:      duplicateMatches.length,
+          },
+        })
+      }
     }
 
-    if (normalizedTextHash) {
+    if (!skipDuplicates && normalizedTextHash) {
       try {
         const { data: textDupRows } = await supabase
           .from('ocr_extractions')
@@ -659,7 +699,6 @@ export async function runReviewOCR(reviewId: string): Promise<OcrResult> {
               normalized_hash:      normalizedTextHash,
             },
           })
-          console.log('[runReviewOCR] OCR text-duplicate signal | matches:', textDupReviewIds.length)
         }
       } catch (dupErr) {
         console.error('[runReviewOCR] text-duplicate check failed (non-fatal)',

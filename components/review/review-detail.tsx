@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useTransition, useMemo } from 'react'
+import { useState, useEffect, useCallback, useTransition, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { triggerReviewOCR, rerunReviewOCR } from '@/app/actions/run-ocr'
@@ -80,11 +80,19 @@ function statusToDecision(status: string): DecisionType | null {
   return null
 }
 
-/** Derive a recommendation from raw confidence when no AI analysis is available. */
+/**
+ * Derive a visual recommendation hint from raw confidence when no AI analysis
+ * is available.  This is DISPLAY-ONLY — it never triggers a decision.
+ *
+ * Fallback is 'escalated' (amber / neutral), not 'rejected', so that the
+ * card does not show a red "reject" hint just because OCR hasn't run yet
+ * or confidence happens to be 0.  A neutral escalation prompt is the safest
+ * default when the evidence is insufficient to suggest approval or rejection.
+ */
 function aiRecFromConfidence(confidence: number): DecisionType {
   if (confidence >= 80) return 'approved'
-  if (confidence >= 50) return 'escalated'
-  return 'rejected'
+  if (confidence >= 40) return 'escalated'
+  return 'escalated'   // neutral fallback — never 'rejected' without real AI analysis
 }
 
 function cardGlowForDecision(
@@ -123,6 +131,21 @@ const actorBadge: Record<string, string> = {
   ai:     'text-indigo-400 bg-indigo-500/10 border-indigo-500/20',
   human:  'text-emerald-400 bg-emerald-500/10 border-emerald-500/20',
 }
+
+// ─── Module-level stale-listener guard ────────────────────────────────────────
+//
+// In Next.js dev-mode with fast-refresh / HMR, React may skip calling useEffect
+// cleanup when a module is hot-reloaded.  If the keyboard handler cleanup is
+// missed, the old listener stays registered on `window` forever, closing over
+// the OLD component's refs.  When the user navigates to the next review, that
+// stale handler fires — with keyboardReadyRef.current already `true` (it was
+// set to true by the previous mount's 400ms timer or pointer-contact gate).
+//
+// Solution: keep a module-level reference to the ONE active cleanup function.
+// Before registering a new listener, always call and clear the previous one.
+// Module-level state survives HMR module reloads and is shared across all
+// instances in the same JS module scope.
+let _activeKeyboardCleanup: (() => void) | null = null
 
 // ─── SubmissionPreviewCard ────────────────────────────────────────────────────
 //
@@ -265,17 +288,6 @@ function SubmissionPreviewCard({ review }: { review: ReviewDetailType }) {
 
   const renderMode = selectRenderMode(fileUrl, reviewType, fileMimeType, fileName)
 
-  // Structured log — visible in browser DevTools console
-  useEffect(() => {
-    console.log('[SubmissionPreview]', {
-      'review.type':       reviewType,
-      fileMimeType:        fileMimeType ?? 'null',
-      fileName:            fileName     ?? 'null',
-      hasFileUrl:          !!fileUrl,
-      selectedRenderMode:  renderMode,
-      fileUrl:             fileUrl ? fileUrl.slice(0, 100) + (fileUrl.length > 100 ? '…' : '') : 'null',
-    })
-  }, [reviewType, fileMimeType, fileName, fileUrl, renderMode])
 
   return (
     <div className="rounded-xl border border-slate-800/80 bg-slate-900/50 shadow-sm overflow-hidden">
@@ -295,27 +307,6 @@ function SubmissionPreviewCard({ review }: { review: ReviewDetailType }) {
         </span>
       </div>
 
-      {/* ── Temporary debug panel ────────────────────────────────────────────
-           Shows render-path decisions inline so issues are immediately visible.
-           Remove once preview rendering is confirmed stable. */}
-      <div className="mx-4 mt-3 rounded border border-slate-700/40 bg-slate-800/30 px-3 py-2 font-mono text-[10px]">
-        <p className="text-[9px] font-semibold uppercase tracking-widest text-slate-600 mb-1.5">Preview Debug</p>
-        <div className="space-y-0.5">
-          {([
-            ['review.type',       reviewType],
-            ['fileMimeType',      fileMimeType ?? 'null'],
-            ['fileName',          fileName     ?? 'null'],
-            ['hasFileUrl',        String(!!fileUrl)],
-            ['selectedRenderMode', renderMode],
-          ] as const).map(([k, v]) => (
-            <div key={k} className="flex gap-2">
-              <span className="text-slate-600 shrink-0 w-36">{k}:</span>
-              <span className={k === 'selectedRenderMode' ? 'text-indigo-400 font-bold' : 'text-slate-300'}>{v}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
       {/* Body */}
       <div className="p-4">
         {renderMode === 'image' && !imgError ? (
@@ -325,11 +316,7 @@ function SubmissionPreviewCard({ review }: { review: ReviewDetailType }) {
             src={fileUrl!}
             alt={fileName ?? 'Submission preview'}
             className="w-full h-auto rounded-lg object-contain max-h-[480px]"
-            onLoad={() => console.log('[SubmissionPreview] image loaded')}
-            onError={() => {
-              console.error('[SubmissionPreview] image failed to load — signed URL may have expired')
-              setImgErrorUrl(fileUrl ?? null)
-            }}
+            onError={() => setImgErrorUrl(fileUrl ?? null)}
           />
         ) : renderMode === 'image' && imgError ? (
           /* ── Image load error ───────────────────────────────────── */
@@ -353,7 +340,6 @@ function SubmissionPreviewCard({ review }: { review: ReviewDetailType }) {
             title={fileName ?? 'PDF preview'}
             className="w-full rounded-lg border border-slate-700/40"
             style={{ height: '480px' }}
-            onLoad={() => console.log('[SubmissionPreview] PDF iframe loaded')}
           />
         ) : renderMode === 'video' ? (
           /* ── Video ──────────────────────────────────────────────── */
@@ -361,8 +347,6 @@ function SubmissionPreviewCard({ review }: { review: ReviewDetailType }) {
             src={fileUrl!}
             controls
             className="w-full rounded-lg max-h-[480px] bg-black"
-            onLoadedMetadata={() => console.log('[SubmissionPreview] video metadata loaded')}
-            onError={() => console.error('[SubmissionPreview] video failed to load')}
           />
         ) : renderMode === 'mixed' ? (
           /* ── Mixed / multi-file placeholder ─────────────────────── */
@@ -698,30 +682,6 @@ function OcrExtractionCard({
   latestOcrJob,
 }: OcrExtractionCardProps) {
   // ── Console log on extraction change ──────────────────────────────────────
-  useEffect(() => {
-    if (!ocrExtraction) {
-      console.log('[OcrExtraction] status: no-extraction (undefined/null)')
-      return
-    }
-    const structuredKeys = ocrExtraction.structuredData
-      ? Object.keys(ocrExtraction.structuredData)
-      : []
-    const renderPath =
-      ocrExtraction.status === 'completed' && structuredKeys.length > 0
-        ? 'structured-fields'
-        : ocrExtraction.status === 'completed' && ocrExtraction.rawText
-        ? 'raw-text'
-        : ocrExtraction.status
-    console.log('[OcrExtraction]', {
-      status:       ocrExtraction.status,
-      engine:       ocrExtraction.engine ?? 'unknown',
-      confidence:   ocrExtraction.confidence,
-      processingMs: ocrExtraction.processingMs,
-      structuredKeys,
-      hasRawText:   !!ocrExtraction.rawText,
-      renderPath,
-    })
-  }, [ocrExtraction])
 
   // ── Derived state ──────────────────────────────────────────────────────────
   // Priority order (highest first):
@@ -732,30 +692,56 @@ function OcrExtractionCard({
   //   isSuccess    — latest extraction completed
   //   isNone       — no extraction and no active job
   const isTriggering_ = isTriggering
+
+  // isProcessing: optimistic transition OR extraction in-flight OR worker has claimed the job.
+  // Includes 'retrying' (job reset for another attempt) so the spinner stays visible between attempts.
   const isProcessing  = isTriggering_ || (
     !!ocrExtraction && (ocrExtraction.status === 'pending' || ocrExtraction.status === 'processing')
-  ) || (!isTriggering_ && !ocrExtraction && latestOcrJob?.status === 'processing')
+  ) || (!isTriggering_ && !ocrExtraction && (
+    latestOcrJob?.status === 'processing' || latestOcrJob?.status === 'retrying'
+  ))
+
+  // isQueued: job enqueued but worker has not claimed it yet.
   const isQueued      = !isTriggering_ && !isProcessing && !ocrExtraction && latestOcrJob?.status === 'pending'
-  const isFailed      = !isTriggering_ && !isQueued && !isProcessing && ocrExtraction?.status === 'failed'
-  const isSuccess     = !isTriggering_ && !isQueued && !isProcessing && ocrExtraction?.status === 'completed'
-  const isNone        = !isTriggering_ && !isQueued && !isProcessing && !ocrExtraction
+
+  // isFailed: extraction row is failed OR (no extraction) the job exhausted all retries.
+  // A completed extraction ALWAYS wins — isFailed only applies when there is no usable extraction.
+  const isFailed      = !isTriggering_ && !isQueued && !isProcessing && (
+    ocrExtraction?.status === 'failed' ||
+    (!ocrExtraction && (
+      latestOcrJob?.status === 'permanently_failed' ||
+      latestOcrJob?.status === 'failed'   // legacy value before resilient-lifecycle migration
+    ))
+  )
+
+  // isSuccess: completed extraction present — wins over any stale pending/retrying job.
+  const isSuccess     = !isTriggering_ && !isQueued && !isProcessing && !isFailed &&
+    ocrExtraction?.status === 'completed'
+
+  // isNone: genuinely no OCR data and no in-flight or failed state.
+  const isNone        = !isTriggering_ && !isQueued && !isProcessing && !isFailed && !ocrExtraction
 
   const statusBadge = isProcessing
-    ? { label: 'Processing', cls: 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20' }
+    ? { label: latestOcrJob?.status === 'retrying' ? 'Retrying' : 'Processing',
+        cls: 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20' }
     : isQueued
-    ? { label: 'Queued',     cls: 'text-blue-400 bg-blue-500/10 border-blue-500/20' }
+    ? { label: 'Queued',   cls: 'text-blue-400 bg-blue-500/10 border-blue-500/20' }
     : isFailed
-    ? { label: 'Failed',     cls: 'text-red-400 bg-red-500/10 border-red-500/20' }
+    ? { label: 'Failed',   cls: 'text-red-400 bg-red-500/10 border-red-500/20' }
     : isSuccess
-    ? { label: 'Complete',   cls: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' }
-    : { label: 'No Data',    cls: 'text-slate-500 bg-slate-800/60 border-slate-700/40' }
+    ? { label: 'Complete', cls: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' }
+    : { label: 'No Data',  cls: 'text-slate-500 bg-slate-800/60 border-slate-700/40' }
 
   const subtitle = isProcessing
-    ? 'Analyzing document…'
+    ? (latestOcrJob?.status === 'retrying'       ? 'Retrying extraction…'
+       : ocrExtraction?.status === 'processing'  ? 'Extracting content…'
+       : 'Processing document…')
     : isQueued
-    ? 'Queued for AI analysis'
+    ? 'Queued — awaiting worker'
     : isFailed
-    ? 'Extraction failed'
+    ? (latestOcrJob?.status === 'permanently_failed'
+        ? 'Extraction failed — max retries reached'
+        : 'Extraction failed')
     : isSuccess
     ? (ocrExtraction!.structuredData?.document_type
         ? fmtDocType(ocrExtraction!.structuredData.document_type)
@@ -814,21 +800,32 @@ function OcrExtractionCard({
 
         {/* State B — queued (job enqueued, worker not yet claimed) ─────────── */}
         {isQueued && (
-          <div className="rounded-lg border border-blue-500/15 bg-blue-500/5 px-4 py-8 text-center">
+          <div className="rounded-lg border border-blue-500/15 bg-blue-500/5 px-4 py-7 text-center">
             <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-blue-500/10 text-blue-400">
               <svg className="w-5 h-5 stroke-current fill-none" viewBox="0 0 24 24" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
                 <path d="M12 6v6l4 2" />
                 <circle cx="12" cy="12" r="9" />
               </svg>
             </div>
-            <p className="text-xs font-semibold text-blue-300 mb-1">Queued for AI analysis</p>
-            <p className="text-[10px] text-slate-500">Waiting for the OCR worker to pick up this job…</p>
+            <p className="text-xs font-semibold text-blue-300 mb-1">Queued — awaiting worker</p>
+            <p className="text-[10px] text-slate-500 mb-4">Processing will begin automatically…</p>
+            <div className="flex items-center justify-center gap-0">
+              {(['OCR Extraction', 'Fraud Analysis', 'AI Analysis'] as const).map((stage, i) => (
+                <div key={stage} className="flex items-center">
+                  {i > 0 && <div className="w-6 h-px bg-slate-700/60" />}
+                  <div className="flex flex-col items-center gap-1 px-1.5">
+                    <div className="w-2 h-2 rounded-full bg-slate-700 border border-slate-600" />
+                    <span className="text-[9px] text-slate-600 whitespace-nowrap">{stage}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
         {/* State C — processing (optimistic while isTriggering, or DB status) ─ */}
         {isProcessing && (
-          <div className="rounded-lg border border-indigo-500/15 bg-indigo-500/5 px-4 py-8 text-center">
+          <div className="rounded-lg border border-indigo-500/15 bg-indigo-500/5 px-4 py-7 text-center">
             <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center">
               <motion.div
                 className="w-6 h-6 rounded-full border-2 border-indigo-500 border-t-transparent"
@@ -836,12 +833,30 @@ function OcrExtractionCard({
                 transition={{ duration: 0.8, repeat: Infinity, ease: 'linear' }}
               />
             </div>
-            <p className="text-xs font-semibold text-indigo-300 mb-1">Analyzing document…</p>
-            <p className="text-[10px] text-slate-500">
+            <p className="text-xs font-semibold text-indigo-300 mb-1">
+              {latestOcrJob?.status === 'retrying' ? 'Retrying extraction…' : 'Processing document…'}
+            </p>
+            <p className="text-[10px] text-slate-500 mb-4">
               {!isTriggering_ && ocrExtraction?.engine
                 ? `Engine: ${ocrExtraction.engine}`
-                : 'Sending to OpenAI Vision API'}
+                : 'OCR → Fraud Analysis → AI Copilot'}
             </p>
+            {/* Pipeline stages — animate the active step */}
+            <div className="flex items-center justify-center gap-0">
+              {(['OCR Extraction', 'Fraud Analysis', 'AI Analysis'] as const).map((stage, i) => (
+                <div key={stage} className="flex items-center">
+                  {i > 0 && <div className="w-6 h-px bg-indigo-500/30" />}
+                  <div className="flex flex-col items-center gap-1 px-1.5">
+                    <motion.div
+                      className="w-2 h-2 rounded-full bg-indigo-500"
+                      animate={{ opacity: [0.3, 1, 0.3] }}
+                      transition={{ duration: 1.5, repeat: Infinity, delay: i * 0.5, ease: 'easeInOut' }}
+                    />
+                    <span className="text-[9px] text-indigo-400/70 whitespace-nowrap">{stage}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
@@ -1535,6 +1550,7 @@ function DecisionCard({
                   { key: 'rejected',  label: 'Reject',   sub: 'Mark fraud',   border: 'border-red-500/20 bg-red-500/5 hover:bg-red-500/10 hover:border-red-500/30',         ring: 'ring-red-500/40',     spinColor: 'border-red-400',     titleColor: 'text-red-300',     icon: <IconXCircle className="w-4 h-4 text-red-400" />,   onClick: onReject  },
                 ] as const).map(btn => (
                   <button
+                    type="button"
                     key={btn.key}
                     onClick={btn.onClick}
                     disabled={isLoading}
@@ -1950,6 +1966,28 @@ export function ReviewDetail({ review }: { review: ReviewDetailType }) {
   const initialDecisionTime = review.decidedAt ? fmtDecisionTime(review.decidedAt) : null
 
   const [actionState, setActionState] = useState<ActionState>(initialDecision ? 'done' : 'idle')
+  // Synchronous lock that prevents duplicate decision submissions.
+  // useRef is used instead of state because state updates are async — a second
+  // rapid click / key-repeat can pass the actionState check before React has
+  // flushed the 'loading' state update.  A ref mutation is instantaneous.
+  const decisionLockRef = useRef(false)
+  // ── Keyboard shortcut gate ───────────────────────────────────────────────────
+  // Keyboard shortcuts are DISABLED until the user makes an explicit
+  // pointer contact (mousedown/pointerdown) with this page.
+  //
+  // WHY pointer-contact, not a setTimeout:
+  //   A timing gate (e.g. 400ms) is a workaround — it can fail if the browser
+  //   replays a buffered keydown after the delay, or if stale HMR listeners have
+  //   their own ref with an already-resolved timer.
+  //
+  //   A pointer-contact gate is semantically correct: you cannot accidentally
+  //   keyboard-reject a review you haven't deliberately clicked on.  Any key
+  //   that arrives before the user touches the review page is ignored, regardless
+  //   of timing.
+  //
+  // This ref is set to true by the pointerdown listener below, and reset to
+  // false on cleanup so it starts fresh on every mount.
+  const keyboardReadyRef = useRef(false)
   const [pendingDecision, setPendingDecision] = useState<DecisionType | null>(null)
   const [finalDecision, setFinalDecision] = useState<DecisionType | null>(initialDecision)
   const [decisionTime, setDecisionTime] = useState<string | null>(initialDecisionTime)
@@ -1975,9 +2013,57 @@ export function ReviewDetail({ review }: { review: ReviewDetailType }) {
   const [, startDecisionTransition] = useTransition()
   const [ocrError, setOcrError] = useState<string | null>(null)
 
+  // ── OCR auto-refresh ────────────────────────────────────────────────────────
+  // The OCR worker runs inside after() — it fires AFTER the HTTP response is
+  // sent.  The review page loads before the worker finishes, so the initial
+  // render shows "Queued" / "Processing".  Poll router.refresh() every 3 s
+  // while any OCR state is transient; stop as soon as it becomes terminal.
+  //
+  // Transient states that need polling:
+  //   ocr_jobs:        pending | processing
+  //   ocr_extractions: pending | processing
+  // Terminal (stop polling):
+  //   ocr_jobs:        completed | retrying | permanently_failed | failed
+  //   ocr_extractions: completed | failed
+  const ocrJobStatus  = review.latestOcrJob?.status
+  const ocrExtStatus  = review.ocrExtraction?.status
+  const ocrIsTransient = (
+    ocrJobStatus  === 'pending'    ||
+    ocrJobStatus  === 'processing' ||
+    ocrExtStatus  === 'pending'    ||
+    ocrExtStatus  === 'processing'
+  )
+
+  useEffect(() => {
+    if (!ocrIsTransient) return
+    const id = setInterval(() => router.refresh(), 3000)
+    return () => clearInterval(id)
+    // ocrJobStatus and ocrExtStatus are included to keep the dep-array length
+    // stable — they feed ocrIsTransient, and removing them caused a React
+    // "dependency array changed size between renders" warning during HMR.
+  }, [ocrIsTransient, ocrJobStatus, ocrExtStatus, router])
+
   // ── Decision error state ───────────────────────────────────────────────────
   // Set when the server action / RPC rejects a decision; auto-dismissed after 6 s.
   const [decisionError, setDecisionError] = useState<string | null>(null)
+
+  // ── Pointer-contact gate ────────────────────────────────────────────────────
+  // Enable keyboard shortcuts only after the user makes a deliberate pointer
+  // contact (mousedown / pointerdown) with this page.  This is a semantic
+  // requirement, not a timing hack: you cannot accidentally keyboard-decide a
+  // review you haven't clicked on.
+  //
+  // Note: we listen for pointerdown (covers mouse + touch) on the document so
+  // that any click anywhere on the review page enables the shortcuts.  The
+  // listener uses { once: true } so it removes itself automatically.
+  useEffect(() => {
+    const activate = () => { keyboardReadyRef.current = true }
+    document.addEventListener('pointerdown', activate, { once: true, passive: true })
+    return () => {
+      document.removeEventListener('pointerdown', activate)
+      keyboardReadyRef.current = false
+    }
+  }, [])
 
   useEffect(() => {
     if (!decisionError) return
@@ -2051,7 +2137,8 @@ export function ReviewDetail({ review }: { review: ReviewDetailType }) {
   }, [review.reviewDbId, isOcrPending, startOcrTransition, router, kickOcrWorker])
 
   const triggerDecision = useCallback((decision: DecisionType) => {
-    if (actionState !== 'idle') return
+    if (decisionLockRef.current) return
+    decisionLockRef.current = true
     setPendingDecision(decision)
     setActionState('loading')
 
@@ -2098,6 +2185,7 @@ export function ReviewDetail({ review }: { review: ReviewDetailType }) {
         router.refresh()
       } else {
         console.error('[Decision] server action failed:', result.code, result.error)
+        decisionLockRef.current = false
         setActionState('idle')
         setPendingDecision(null)
         // Map error codes to reviewer-friendly messages
@@ -2112,7 +2200,7 @@ export function ReviewDetail({ review }: { review: ReviewDetailType }) {
         setDecisionError(msg)
       }
     })
-  }, [actionState, review.reviewDbId, review.assignedTo, startDecisionTransition, router])
+  }, [review.reviewDbId, review.assignedTo, startDecisionTransition, router])
 
   const handleApprove  = useCallback(() => triggerDecision('approved'),  [triggerDecision])
   const handleEscalate = useCallback(() => triggerDecision('escalated'), [triggerDecision])
@@ -2124,6 +2212,7 @@ export function ReviewDetail({ review }: { review: ReviewDetailType }) {
     if (!dbId) {
       // Demo review — reset locally (no reason required)
       const ts = nowTimeStr()
+      decisionLockRef.current = false   // unlock so future decisions are allowed
       setActionState('idle')
       setFinalDecision(null)
       setPendingDecision(null)
@@ -2147,6 +2236,7 @@ export function ReviewDetail({ review }: { review: ReviewDetailType }) {
     startDecisionTransition(async () => {
       const result = await reopenReview(dbId, reason)
       if (result.success) {
+        decisionLockRef.current = false
         setDecisionError(null)
         setActionState('idle')
         setFinalDecision(null)
@@ -2169,16 +2259,36 @@ export function ReviewDetail({ review }: { review: ReviewDetailType }) {
   }, [review.reviewDbId, review.assignedTo, startDecisionTransition, router])
 
   useEffect(() => {
+    // Belt-and-suspenders: clear any stale listener left by HMR.
+    // Each old listener closes over a dead keyboardReadyRef (possibly true),
+    // so without this guard it could fire a decision on the new page.
+    if (_activeKeyboardCleanup) {
+      _activeKeyboardCleanup()
+      _activeKeyboardCleanup = null
+    }
+
     const handler = (e: KeyboardEvent) => {
+      if (!keyboardReadyRef.current) return  // pointer-contact gate
+      if (e.repeat) return
       if (actionState !== 'idle') return
       const target = e.target as HTMLElement
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return
-      if (e.key === 'a' || e.key === 'A') handleApprove()
+      const tag    = target.tagName
+      if (
+        tag === 'INPUT'    || tag === 'TEXTAREA' || tag === 'SELECT' ||
+        tag === 'BUTTON'   || tag === 'A'        || target.isContentEditable
+      ) return
+      if      (e.key === 'a' || e.key === 'A') handleApprove()
       else if (e.key === 'e' || e.key === 'E') handleEscalate()
       else if (e.key === 'r' || e.key === 'R') handleReject()
     }
+
     window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
+    const cleanup = () => {
+      window.removeEventListener('keydown', handler)
+      if (_activeKeyboardCleanup === cleanup) _activeKeyboardCleanup = null
+    }
+    _activeKeyboardCleanup = cleanup
+    return cleanup
   }, [actionState, handleApprove, handleEscalate, handleReject])
 
   return (

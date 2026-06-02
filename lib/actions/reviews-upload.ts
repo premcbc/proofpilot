@@ -1,25 +1,57 @@
 'use server'
 
+import { after } from 'next/server'
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { getCurrentMembership, canReview } from '@/lib/supabase/org'
-import { optimizeImageForOcr, isOptimizableMimeType } from '@/lib/actions/image-optimizer'
+import {
+  optimizeImageForOcr,
+  isOptimizableMimeType,
+} from '@/lib/actions/image-optimizer'
 import { sha256Buffer } from '@/lib/security/hash'
+import { enqueueOcrJob } from '@/lib/actions/ocr-queue'
 
-export type UploadState = { error: string } | { reviewCode: string } | null
+export type UploadState =
+  | { error: string }
+  | { reviewCode: string }
+  | null
 
-const ALLOWED_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'application/pdf']
+const ALLOWED_MIME_TYPES = [
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'application/pdf',
+]
+
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
 
-function mimeToType(mime: string, fileName?: string): string {
+function mimeToType(
+  mime: string,
+  fileName?: string
+): string {
   const m = mime.toLowerCase()
-  const ext = (fileName ?? '').toLowerCase().split('.').pop() ?? ''
 
-  if (m.includes('pdf') || ext === 'pdf') return 'document'
+  const ext =
+    (fileName ?? '')
+      .toLowerCase()
+      .split('.')
+      .pop() ?? ''
+
+  if (m.includes('pdf') || ext === 'pdf') {
+    return 'document'
+  }
 
   if (
     m.startsWith('image/') ||
-    ['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'heic'].includes(ext)
+    [
+      'png',
+      'jpg',
+      'jpeg',
+      'webp',
+      'gif',
+      'avif',
+      'heic',
+    ].includes(ext)
   ) {
     return 'screenshot'
   }
@@ -44,16 +76,20 @@ export async function createReviewWithFile(
     (formData.get('title') as string | null)?.trim()
 
   const description =
-    (formData.get('description') as string | null)?.trim() || null
+    (formData.get('description') as string | null)?.trim() ||
+    null
 
   const externalRef =
-    (formData.get('externalRef') as string | null)?.trim() || null
+    (formData.get('externalRef') as string | null)?.trim() ||
+    null
 
   const typeInput =
     (formData.get('type') as string | null)?.trim() || null
 
   if (!file || file.size === 0) {
-    return { error: 'Please select a file to upload.' }
+    return {
+      error: 'Please select a file to upload.',
+    }
   }
 
   const title = titleInput || file.name
@@ -74,9 +110,10 @@ export async function createReviewWithFile(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const supabase = (await createClient()) as any
 
-  // ── Membership ─────────────────────────────────────────────────────
+  // ── Membership ─────────────────────────────────────────
 
-  const membership = await getCurrentMembership(supabase)
+  const membership =
+    await getCurrentMembership(supabase)
 
   if (!membership) {
     return {
@@ -99,7 +136,9 @@ export async function createReviewWithFile(
   } = await supabase.auth.getUser()
 
   if (!user) {
-    return { error: 'Not authenticated.' }
+    return {
+      error: 'Not authenticated.',
+    }
   }
 
   const reviewType =
@@ -108,7 +147,7 @@ export async function createReviewWithFile(
   const reviewCode =
     'REV-' + Date.now().toString(36).toUpperCase()
 
-  // ── Create review row ──────────────────────────────────────────────
+  // ── Create review row ─────────────────────────────────
 
   const reviewPayload = {
     organization_id: orgId,
@@ -121,12 +160,14 @@ export async function createReviewWithFile(
     submitted_by: user.id,
   }
 
-  const { data: review, error: reviewError } =
-    await supabase
-      .from('reviews')
-      .insert(reviewPayload)
-      .select('id, review_code')
-      .single()
+  const {
+    data: review,
+    error: reviewError,
+  } = await supabase
+    .from('reviews')
+    .insert(reviewPayload)
+    .select('id, review_code')
+    .single()
 
   if (reviewError || !review) {
     return {
@@ -136,7 +177,7 @@ export async function createReviewWithFile(
     }
   }
 
-  // ── Step 3: Upload original file ──────────────────────────────────
+  // ── Upload original file ──────────────────────────────
 
   const storagePath =
     `organizations/${orgId}/reviews/${review.id}/original/${Date.now()}-${file.name}`
@@ -155,12 +196,13 @@ export async function createReviewWithFile(
     fileHash
   )
 
-  const { error: uploadError } = await supabase.storage
-    .from('review-files')
-    .upload(storagePath, bytes, {
-      contentType: file.type,
-      upsert: false,
-    })
+  const { error: uploadError } =
+    await supabase.storage
+      .from('review-files')
+      .upload(storagePath, bytes, {
+        contentType: file.type,
+        upsert: false,
+      })
 
   if (uploadError) {
     console.error(
@@ -182,7 +224,7 @@ export async function createReviewWithFile(
     '[createReview] original file uploaded successfully'
   )
 
-  // ── OCR Optimized Copy ─────────────────────────────────────────────
+  // ── OCR optimized copy ────────────────────────────────
 
   let ocrStoragePath: string | null = null
 
@@ -229,7 +271,7 @@ export async function createReviewWithFile(
     }
   }
 
-  // ── review_files row ───────────────────────────────────────────────
+  // ── review_files row ──────────────────────────────────
 
   const filePayload = {
     organization_id: orgId,
@@ -244,9 +286,10 @@ export async function createReviewWithFile(
     uploaded_by: user.id,
   }
 
-  const { error: fileError } = await supabase
-    .from('review_files')
-    .insert(filePayload)
+  const { error: fileError } =
+    await supabase
+      .from('review_files')
+      .insert(filePayload)
 
   if (fileError) {
     console.error(
@@ -257,6 +300,50 @@ export async function createReviewWithFile(
     console.log(
       '[createReview] review_files row created'
     )
+
+    // ── Enqueue OCR job ────────────────────────────────
+
+    const enqueueResult = await enqueueOcrJob(
+      review.id,
+      {
+        reprocessReason: 'initial_upload',
+      }
+    )
+
+    if (enqueueResult.success) {
+      console.log(
+        '[createReview] OCR job enqueued',
+        '| jobId:',
+        enqueueResult.jobId,
+        '| deduplicated:',
+        enqueueResult.deduplicated
+      )
+
+      if (!enqueueResult.deduplicated) {
+        // ── Start worker after response is sent ───────
+
+        after(async () => {
+          try {
+            const { processOcrQueue } = await import('@/lib/ocr/process-worker')
+            await processOcrQueue()
+          } catch (err) {
+            console.error(
+              '[createReview] after() OCR worker error:',
+              err instanceof Error
+                ? err.message
+                : String(err)
+            )
+          }
+        })
+      }
+    } else {
+      console.error(
+        '[createReview] OCR enqueue failed | reviewId:',
+        review.id,
+        '| error:',
+        enqueueResult.error
+      )
+    }
   }
 
   revalidatePath('/reviews')

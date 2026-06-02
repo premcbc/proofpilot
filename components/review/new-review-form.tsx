@@ -28,9 +28,14 @@ export function NewReviewForm() {
   const [file, setFile] = useState<File | null>(null)
   const [dragOver, setDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  // Guard against calling router.push more than once per successful upload.
+  // In React 19 / Next.js 16, the effect deps can cause a second firing when
+  // `router` gets a new reference after the navigation starts.
+  const navigatedRef = useRef(false)
 
   useEffect(() => {
-    if (state && 'reviewCode' in state) {
+    if (state && 'reviewCode' in state && !navigatedRef.current) {
+      navigatedRef.current = true
       router.push(`/reviews/${state.reviewCode}`)
     }
   }, [state, router])
